@@ -6,6 +6,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=logs/%x-%j.out
 set -euo pipefail
+: "${EDGE_ENV_INIT:?export EDGE_ENV_INIT=/absolute/path/init_env.sh}"
 : "${DUET_EDGE_ROOT:?export DUET_EDGE_ROOT=/absolute/path/to/duet-edge}"
 : "${EDGE_CHECKPOINT:?export EDGE_CHECKPOINT=/absolute/path/train-1800.pt}"
 : "${FIXTURE:?export FIXTURE=/absolute/path/normalized-fixture.npz}"
@@ -13,6 +14,8 @@ set -euo pipefail
 : "${SAMPLING_STEPS:?export SAMPLING_STEPS=the accepted benchmark value}"
 : "${PLAYOUT_DELAY_S:?export PLAYOUT_DELAY_S=measured p99 plus at least 0.1s}"
 RUN_ID="acceptance-${SLURM_JOB_ID}"
+source "${EDGE_ENV_INIT}"
+conda activate "${EDGE_CONDA_ENV:-edge}"
 mkdir -p logs "${EDGE_OUTPUT_DIR}"
 export PYTHONPATH="${PWD}/src"
 export PYTHONUNBUFFERED=1

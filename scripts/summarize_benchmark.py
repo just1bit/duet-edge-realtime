@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 from pathlib import Path
 
 
@@ -22,8 +23,20 @@ def main():
             "deadline_candidate": data["inference"]["p99_ms"] + 100 < 2500,
             "summary": str(path),
         })
+    passing = [row for row in rows if row["deadline_candidate"]]
+    # Leave one full 100 ms safety margin above the measured p99, rounded up to
+    # a value that is easy to place in the runtime config.
+    for row in rows:
+        delay = math.ceil((row["p99_ms"] / 1000.0 + 0.1) * 1000.0) / 1000.0
+        row["recommended_playout_delay_s"] = delay if delay < 2.5 else None
+    result = {
+        "decision": "baseline_pass" if passing else "optimization_required",
+        "rule": "p99_ms + 100 < 2500",
+        "recommended_baseline": passing[0] if passing else None,
+        "candidates": rows,
+    }
     output = Path(args.root) / args.output
-    output.write_text(json.dumps({"candidates": rows}, indent=2) + "\n")
+    output.write_text(json.dumps(result, indent=2) + "\n")
     print(output)
 
 

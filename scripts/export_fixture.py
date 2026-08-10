@@ -34,12 +34,23 @@ def main():
         window = MotionWindow(0, 0, 150, 5.0, 42, lead)
         generated = backend.infer(window)
         unnormalized = backend.unnormalize(generated.motion[None])[0]
-        joints = OnlineContinuityProcessor(backend).process(generated.motion)
+        generated_processor = OnlineContinuityProcessor(backend)
+        generated_joints = np.concatenate([
+            generated_processor.process(generated.motion),
+            generated_processor.flush(),
+        ])
+        lead_processor = OnlineContinuityProcessor(backend)
+        lead_joints = np.concatenate([
+            lead_processor.process(lead),
+            lead_processor.flush(),
+        ])
         metadata = {**adapter.metadata, **backend.version_info(), "seed":42, "steps":args.steps}
         target = Path(args.output); target.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(target, motion_151=lead, lead_normalized=lead,
                             generated_normalized=generated.motion,
-                            generated_unnormalized=unnormalized, joints=joints,
+                            generated_unnormalized=unnormalized,
+                            lead_joints=lead_joints,
+                            generated_joints=generated_joints,
                             metadata_json=json.dumps(metadata))
         print(target)
     finally:
