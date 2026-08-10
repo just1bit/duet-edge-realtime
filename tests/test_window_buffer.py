@@ -35,6 +35,7 @@ class WindowBufferTests(unittest.TestCase):
             else:
                 tail = buffer.flush(count / 30)
                 self.assertEqual(tail.valid_frames, count - 150)
+                self.assertEqual(tail.start_seq, 75)
                 self.assertEqual(tail.motion.shape, (150,151))
 
     def test_sequence_errors(self):

@@ -10,10 +10,13 @@ class ConfigTests(unittest.TestCase):
     def test_v1_constraints(self):
         RealtimeConfig()
         for kwargs in (
-            {"window_frames":149}, {"hop_frames":74}, {"playout_delay_s":2.5}
+            {"window_frames":149}, {"hop_frames":74},
+            {"inference_queue_size":0}, {"output_queue_size":0},
+            {"inference_queue_policy":"drop"}, {"deadline_miss_policy":"skip"},
         ):
             with self.assertRaises(ValueError):
                 StreamConfig(**kwargs)
+        self.assertEqual(StreamConfig(playout_delay_s=2.5).playout_delay_s, 2.5)
         with self.assertRaises(ValueError):
             ModelConfig(sampling_steps=0)
 
@@ -22,7 +25,7 @@ class ConfigTests(unittest.TestCase):
             "backend":"cuda",
             "paths":{"duet_edge_root":"/engine", "checkpoint":"/model.pt"},
             "model":{"sampling_steps":25, "seed":9},
-            "stream":{"playout_delay_s":1.5},
+            "stream":{"playout_delay_s":1.5, "inference_queue_policy":"fail"},
             "server":{"port":9876},
         }
         with tempfile.TemporaryDirectory() as temp:
@@ -34,6 +37,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.sampling_steps, 25)
         self.assertEqual(config.model.seed, 9)
         self.assertEqual(config.port, 9876)
+        self.assertEqual(config.inference_queue_policy, "fail")
         self.assertIn("stream", config.as_dict())
 
 

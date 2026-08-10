@@ -33,16 +33,23 @@ class ProtocolTests(unittest.TestCase):
             asyncio.run(service.run())
             messages = [json.loads(line) for line in (root / "stream.ndjson").read_text().splitlines()]
             self.assertEqual(messages[0]["type"], "hello")
+            self.assertEqual(messages[0]["protocol"], "duet-edge-stream/v2")
             self.assertEqual(len(messages[0]["parents"]), 24)
+            states = [message["state"] for message in messages if message["type"] == "state"]
+            self.assertEqual(states, ["starting", "buffering", "playing", "draining", "finished"])
             frames = [message for message in messages if message["type"] == "frame"]
             self.assertEqual(len(frames), 300)
             self.assertEqual([frame["seq"] for frame in frames], list(range(300)))
             self.assertTrue(all(len(frame["joints"]) == 24 for frame in frames))
+            self.assertTrue(all(frame["frame_id"] == frame["seq"] for frame in frames))
+            self.assertTrue(all(frame["schema_version"] == "2.0.0" for frame in frames))
             self.assertEqual(messages[-1]["type"], "eos")
             summary = json.loads((root / "summary.json").read_text())
             self.assertEqual(summary["output"]["frames"], 300)
             self.assertEqual(summary["inference"]["count"], 3)
             self.assertEqual(summary["queues"]["overloads"], 0)
+            self.assertEqual(summary["output"]["committed_frames"], 300)
+            self.assertEqual(summary["lifecycle"]["final_state"], "finished")
 
     def test_partial_tail_preserves_exact_length(self):
         for count in (151, 224):
@@ -76,6 +83,27 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(summary["errors"])
             messages = [json.loads(x) for x in (root / "stream.ndjson").read_text().splitlines()]
             self.assertTrue(any(m["type"] == "error" for m in messages))
+            self.assertEqual(
+                [m["state"] for m in messages if m["type"] == "state"][-1], "failed"
+            )
+
+    def test_deadline_fail_policy_is_explicit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            np.savez(root / "fixture.npz", motion_151=identity_motion(150))
+            config = RealtimeConfig(stream=StreamConfig(
+                inference_slo_ms=1.0, deadline_miss_policy="fail"
+            ))
+            service = StreamingService(
+                config, FakeInferenceBackend(delay_s=0.005),
+                NormalizedFixtureAdapter(root / "fixture.npz"),
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                VirtualClock(), root / "summary.json",
+            )
+            with self.assertRaisesRegex(RuntimeError, "exceeded"):
+                asyncio.run(service.run())
+            summary = json.loads((root / "summary.json").read_text())
+            self.assertEqual(summary["inference"]["deadline_misses"], 1)
 
     def test_virtual_playout_deadlines_are_exact(self):
         with tempfile.TemporaryDirectory() as temp:

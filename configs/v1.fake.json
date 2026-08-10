@@ -19,7 +19,12 @@
     "hop_frames": 75,
     "playout_delay_s": 2.0,
     "inference_queue_size": 1,
-    "viewer_queue_frames": 150
+    "output_queue_size": 2,
+    "viewer_queue_frames": 150,
+    "inference_queue_policy": "block",
+    "inference_slo_ms": 1900.0,
+    "deadline_miss_policy": "continue",
+    "jitter_slo_ms": 20.0
   },
   "server": {
     "bind_host": "127.0.0.1",

@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const canvas = $('canvas'), ctx = canvas.getContext('2d');
-let parents = [], ws = null, view = 0, playbackTimer = null;
+let parents = [], ws = null, view = 0, playbackTimer = null, streamFps = 30;
 
 function setConnection(text, online=false) {
   $('connection').textContent = text;
@@ -30,10 +30,16 @@ function draw(joints) {
 }
 
 function handle(message) {
-  if(message.type==='hello') { parents=message.parents; $('latency').textContent=`${message.fixed_latency_s.toFixed(2)} s`; $('status').textContent='流已就绪'; }
+  if(message.type==='hello') { parents=message.parents; streamFps=message.fps||30; $('latency').textContent=`${message.fixed_latency_s.toFixed(2)} s`; $('status').textContent='流已就绪'; }
+  if(message.type==='state') {
+    const labels={starting:'启动中',buffering:'缓冲中',playing:'播放中',draining:'尾段提交',finished:'已完成',failed:'运行错误'};
+    $('status').textContent=labels[message.state]||message.state;
+  }
   if(message.type==='frame') { draw(message.joints); $('frame').textContent=message.seq; $('motion-time').textContent=`${message.motion_time_s.toFixed(2)} s`; }
   if(message.type==='metrics') { $('p95').textContent=message.inference_p95_ms==null?'—':`${message.inference_p95_ms.toFixed(1)} ms`; $('queue').textContent=`${message.input_backlog}/${message.output_backlog}`; $('dropped').textContent=message.dropped_view_frames; }
-  if(message.type==='degraded') $('status').textContent='降级：推理超时';
+  if(message.type==='degraded') $('status').textContent='推理延迟超过 SLO';
+  if(message.type==='backpressure') $('status').textContent='输入等待推理容量';
+  if(message.type==='overload') $('status').textContent='推理队列已满';
   if(message.type==='eos') $('status').textContent=`完成 / ${message.frames} 帧`;
   if(message.type==='error') $('status').textContent='运行错误';
 }
@@ -55,5 +61,5 @@ $('file').onchange = async event => {
   const messages=lines.map(JSON.parse); messages.filter(m=>m.type==='hello').forEach(handle);
   const frames=messages.filter(m=>m.type==='frame'); let i=0;
   setConnection('NDJSON 回放',true); $('status').textContent='本地回放';
-  playbackTimer=setInterval(()=>{if(i>=frames.length){clearInterval(playbackTimer);$('status').textContent='回放完成';return}handle(frames[i++])},1000/30);
+  playbackTimer=setInterval(()=>{if(i>=frames.length){clearInterval(playbackTimer);$('status').textContent='回放完成';return}handle(frames[i++])},1000/streamFps);
 };

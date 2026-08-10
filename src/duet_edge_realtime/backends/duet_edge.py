@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import subprocess
 import sys
 import time
@@ -11,8 +10,6 @@ import numpy as np
 
 from ..schemas import GeneratedChunk, MotionWindow
 from .base import InferenceBackend
-
-DEFAULT_LOCK_PATH = Path(__file__).resolve().parents[3] / "compat" / "duet-edge.lock.json"
 
 
 class CudaDuetEdgeBackend(InferenceBackend):
@@ -25,8 +22,6 @@ class CudaDuetEdgeBackend(InferenceBackend):
         guidance_lead: float = 2.0,
         sampling_steps: int = 50,
         eta: float = 1.0,
-        lock_path: str | Path = DEFAULT_LOCK_PATH,
-        allow_engine_mismatch: bool = False,
     ):
         self.checkpoint = Path(checkpoint).resolve()
         self.engine_root = Path(duet_edge_root).resolve()
@@ -34,20 +29,17 @@ class CudaDuetEdgeBackend(InferenceBackend):
         self.guidance_lead = guidance_lead
         self.sampling_steps = sampling_steps
         self.eta = eta
-        self.lock_path = Path(lock_path).resolve()
-        self.allow_engine_mismatch = allow_engine_mismatch
         self.edge = None
         self.torch = None
         self._zero_music = None
         self._engine_commit = "unknown"
         self._engine_dirty = False
         self._engine_python_dirty = False
-        self._non_reproducible = False
 
     def warmup(self) -> None:
         if not self.checkpoint.is_file():
             raise FileNotFoundError(self.checkpoint)
-        self._validate_compatibility()
+        self._validate_runtime_layout()
         if str(self.engine_root) not in sys.path:
             sys.path.insert(0, str(self.engine_root))
         import torch
@@ -82,36 +74,19 @@ class CudaDuetEdgeBackend(InferenceBackend):
                 )
             )
 
-    def _validate_compatibility(self) -> None:
+    def _validate_runtime_layout(self) -> None:
         required = ("EDGE.py", "model/diffusion.py", "vis.py")
         missing_files = [name for name in required if not (self.engine_root / name).is_file()]
         if missing_files:
             raise FileNotFoundError(
                 f"invalid DUET_EDGE_ROOT {self.engine_root}; missing {missing_files}"
             )
-        if not self.lock_path.is_file():
-            raise FileNotFoundError(f"missing compatibility lock: {self.lock_path}")
-        lock = json.loads(self.lock_path.read_text(encoding="utf-8"))
-        expected_commit = lock["commit"]
         self._engine_commit = self._git("rev-parse", "HEAD")
         self._engine_dirty = bool(self._git("status", "--porcelain", "--untracked-files=all"))
         python_status = self._git(
             "status", "--porcelain", "--untracked-files=all", "--", ":(glob)**/*.py"
         )
         self._engine_python_dirty = bool(python_status)
-        mismatches = []
-        if self._engine_commit != expected_commit:
-            mismatches.append(
-                f"commit expected {expected_commit}, got {self._engine_commit}"
-            )
-        if self._engine_python_dirty:
-            mismatches.append("Python source worktree is dirty")
-        self._non_reproducible = bool(mismatches)
-        if mismatches and not self.allow_engine_mismatch:
-            raise RuntimeError(
-                "Duet-EDGE compatibility check failed: " + "; ".join(mismatches)
-                + ". Use --allow-engine-mismatch only for development."
-            )
 
     def infer(self, window: MotionWindow) -> GeneratedChunk:
         if self.edge is None or self.torch is None:
@@ -128,7 +103,7 @@ class CudaDuetEdgeBackend(InferenceBackend):
         start_event.record()
         with torch.inference_mode():
             if self.sampling_steps == 50 and self.eta == 1.0:
-                # The locked baseline engine hard-codes these defaults.
+                # The baseline Duet-EDGE API uses these sampling defaults.
                 sample = self.edge.diffusion.ddim_sample((1, 150, 151), cond)
             else:
                 try:
@@ -139,8 +114,8 @@ class CudaDuetEdgeBackend(InferenceBackend):
                     )
                 except TypeError as exc:
                     raise RuntimeError(
-                        "non-default DDIM settings require a compatible external "
-                        "Duet-EDGE optimization commit"
+                        "the selected Duet-EDGE runtime exposes the baseline DDIM API; "
+                        "sampling_timesteps and eta are available in the optimized API"
                     ) from exc
         end_event.record()
         torch.cuda.synchronize()
@@ -186,12 +161,10 @@ class CudaDuetEdgeBackend(InferenceBackend):
         return {
             "backend": "cuda",
             "engine_root": str(self.engine_root),
-            "engine_repository": json.loads(self.lock_path.read_text())["repository"],
+            "engine_repository": self._git("config", "--get", "remote.origin.url"),
             "engine_commit": self._engine_commit,
             "engine_dirty": self._engine_dirty,
             "engine_python_dirty": self._engine_python_dirty,
-            "expected_engine_commit": json.loads(self.lock_path.read_text())["commit"],
-            "non_reproducible": self._non_reproducible,
             "checkpoint": str(self.checkpoint),
             "checkpoint_bytes": self.checkpoint.stat().st_size,
             "checkpoint_sha256": digest.hexdigest(),

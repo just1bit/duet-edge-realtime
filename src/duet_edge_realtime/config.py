@@ -36,19 +36,34 @@ class StreamConfig:
     hop_frames: int = 75
     playout_delay_s: float = 2.0
     inference_queue_size: int = 1
+    output_queue_size: int = 2
     viewer_queue_frames: int = 150
+    inference_queue_policy: str = "block"
+    inference_slo_ms: float = 1900.0
+    deadline_miss_policy: str = "continue"
+    jitter_slo_ms: float = 20.0
 
     def __post_init__(self) -> None:
         if self.fps <= 0:
             raise ValueError("stream.fps must be positive")
         if self.window_frames != 150 or self.hop_frames != 75:
             raise ValueError("V1 requires stream.window_frames=150 and hop_frames=75")
-        if not 0 <= self.playout_delay_s < self.hop_frames / self.fps:
-            raise ValueError("stream.playout_delay_s must be in [0, hop period)")
-        if self.inference_queue_size != 1:
-            raise ValueError("V1 stream.inference_queue_size must be 1")
+        if self.playout_delay_s < 0:
+            raise ValueError("stream.playout_delay_s must be non-negative")
+        if self.inference_queue_size < 1:
+            raise ValueError("stream.inference_queue_size must be positive")
+        if self.output_queue_size < 1:
+            raise ValueError("stream.output_queue_size must be positive")
         if self.viewer_queue_frames < 1:
             raise ValueError("stream.viewer_queue_frames must be positive")
+        if self.inference_queue_policy not in {"block", "fail"}:
+            raise ValueError("stream.inference_queue_policy must be block or fail")
+        if self.inference_slo_ms <= 0:
+            raise ValueError("stream.inference_slo_ms must be positive")
+        if self.deadline_miss_policy not in {"continue", "fail"}:
+            raise ValueError("stream.deadline_miss_policy must be continue or fail")
+        if self.jitter_slo_ms <= 0:
+            raise ValueError("stream.jitter_slo_ms must be positive")
 
 
 @dataclass(frozen=True)
@@ -100,6 +115,18 @@ class RealtimeConfig:
     def playout_delay_s(self): return self.stream.playout_delay_s
     @property
     def viewer_queue_frames(self): return self.stream.viewer_queue_frames
+    @property
+    def inference_queue_size(self): return self.stream.inference_queue_size
+    @property
+    def output_queue_size(self): return self.stream.output_queue_size
+    @property
+    def inference_queue_policy(self): return self.stream.inference_queue_policy
+    @property
+    def inference_slo_ms(self): return self.stream.inference_slo_ms
+    @property
+    def deadline_miss_policy(self): return self.stream.deadline_miss_policy
+    @property
+    def jitter_slo_ms(self): return self.stream.jitter_slo_ms
     @property
     def guidance_music(self): return self.model.guidance_music
     @property

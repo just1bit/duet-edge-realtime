@@ -37,12 +37,20 @@ class RunMetrics:
     inference_count: int = 0
     inference_wall_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
     inference_cuda_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
+    backpressure_wait_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
     jitter_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
+    end_to_end_latency_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
     input_backlog_high_water: int = 0
     output_backlog_high_water: int = 0
     dropped_view_frames: int = 0
     underflows: int = 0
     overloads: int = 0
+    backpressure_waits: int = 0
+    output_backpressure_waits: int = 0
+    inference_deadline_misses: int = 0
+    committed_batches: int = 0
+    committed_frames: int = 0
+    state_history: list[dict] = field(default_factory=list)
     sequence_errors: int = 0
     errors: list[str] = field(default_factory=list)
     exit_reason: str = "running"
@@ -56,6 +64,8 @@ class RunMetrics:
             "end_seq": window.end_seq,
             "valid_frames": window.valid_frames,
             "trigger_time_s": window.trigger_time_s,
+            "first_source_time_s": window.first_source_time_s,
+            "last_source_time_s": window.last_source_time_s,
         })
         self.inference_wall_ms.append(chunk.inference_wall_ms)
         if chunk.inference_cuda_ms is not None:
@@ -64,15 +74,31 @@ class RunMetrics:
     def live_message(self) -> dict:
         return {
             "type": "metrics",
+            "schema_version": "2.0.0",
+            "run_id": self.run_id,
+            "session_id": self.run_id,
+            "stream_id": f"{self.run_id}:companion-motion",
             "inference_p95_ms": percentile(self.inference_wall_ms, 0.95),
             "input_backlog": self.input_backlog_high_water,
             "output_backlog": self.output_backlog_high_water,
             "dropped_view_frames": self.dropped_view_frames,
             "underflow": self.underflows,
+            "inference_deadline_misses": self.inference_deadline_misses,
+            "backpressure_waits": self.backpressure_waits,
         }
 
+    def record_state(self, state: str, monotonic_offset_s: float) -> None:
+        self.state_history.append({
+            "state": state,
+            "wall_time_s": time.time(),
+            "monotonic_offset_s": monotonic_offset_s,
+        })
+
+    def record_commit(self, frame_count: int) -> None:
+        self.committed_batches += 1
+        self.committed_frames += frame_count
+
     def summary(self, backend: dict, config: dict) -> dict:
-        elapsed = max(time.time() - self.started_wall_s, 1e-9)
         input_span = (
             self.input_last_clock_s - self.input_first_clock_s
             if self.input_first_clock_s is not None and self.input_last_clock_s is not None
@@ -83,6 +109,10 @@ class RunMetrics:
             if self.output_first_clock_s is not None and self.output_last_clock_s is not None
             else 0.0
         )
+        stream_config = config["stream"]
+        hop_period_ms = stream_config["hop_frames"] / stream_config["fps"] * 1000.0
+        inference_p99_ms = percentile(self.inference_wall_ms, 0.99)
+        jitter_p95_ms = percentile(self.jitter_ms, 0.95)
         return {
             "run_id": self.run_id,
             "exit_reason": self.exit_reason,
@@ -111,12 +141,23 @@ class RunMetrics:
                 "cuda_ms": list(self.inference_cuda_ms),
                 "p50_ms": percentile(self.inference_wall_ms, 0.50),
                 "p95_ms": percentile(self.inference_wall_ms, 0.95),
-                "p99_ms": percentile(self.inference_wall_ms, 0.99),
+                "p99_ms": inference_p99_ms,
+                "deadline_misses": self.inference_deadline_misses,
+                "configured_slo_ms": stream_config["inference_slo_ms"],
+                "hop_period_ms": hop_period_ms,
+                "headroom_ms": (
+                    hop_period_ms - inference_p99_ms
+                    if inference_p99_ms is not None else None
+                ),
             },
             "queues": {
                 "inference_high_water": self.input_backlog_high_water,
                 "output_high_water": self.output_backlog_high_water,
                 "overloads": self.overloads,
+                "inference_policy": stream_config["inference_queue_policy"],
+                "backpressure_waits": self.backpressure_waits,
+                "output_backpressure_waits": self.output_backpressure_waits,
+                "backpressure_wait_p95_ms": percentile(self.backpressure_wait_ms, 0.95),
             },
             "output": {
                 "frames": self.output_frames,
@@ -126,10 +167,29 @@ class RunMetrics:
                     if self.output_first_clock_s is not None and self.input_first_clock_s is not None
                     else None
                 ),
-                "jitter_p95_ms": percentile(self.jitter_ms, 0.95),
+                "jitter_p95_ms": jitter_p95_ms,
                 "jitter_mean_ms": statistics.fmean(self.jitter_ms) if self.jitter_ms else None,
+                "end_to_end_latency_p50_ms": percentile(self.end_to_end_latency_ms, 0.50),
+                "end_to_end_latency_p95_ms": percentile(self.end_to_end_latency_ms, 0.95),
                 "underflows": self.underflows,
                 "dropped_view_frames": self.dropped_view_frames,
+                "committed_batches": self.committed_batches,
+                "committed_frames": self.committed_frames,
+            },
+            "lifecycle": {
+                "final_state": self.state_history[-1]["state"] if self.state_history else None,
+                "history": self.state_history,
+            },
+            "slo": {
+                "inference_p99_met": (
+                    inference_p99_ms is not None
+                    and inference_p99_ms <= stream_config["inference_slo_ms"]
+                ),
+                "jitter_p95_met": (
+                    jitter_p95_ms is not None
+                    and jitter_p95_ms <= stream_config["jitter_slo_ms"]
+                ),
+                "continuous_playout_met": self.underflows == 0,
             },
             "errors": self.errors,
         }

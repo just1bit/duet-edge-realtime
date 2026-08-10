@@ -30,7 +30,7 @@ class ContinuityTests(unittest.TestCase):
         result = slerp(q, -q, np.asarray([[[0.5]]]))
         np.testing.assert_allclose(result, q, atol=1e-8)
 
-    def test_incremental_matches_equivalent_offline_stitch(self):
+    def test_incremental_matches_reference_parameter_stitch(self):
         chunks = [identity_motion(150) for _ in range(3)]
         chunks[1][:, 4] += 4.0
         chunks[2][:, 4] -= 3.0

@@ -61,10 +61,9 @@ class SlidingWindowBuffer:
         pad_count = self.window_frames - len(frames)
         if pad_count:
             frames = [frames[0]] * pad_count + frames
-        motion = np.stack([frame.motion_151 for frame in frames])
         # The final window should advance by one hop from the previous window;
         # take the latest hop of real frames and pad its future with the EOF frame.
-        start_seq = self._next_trigger_seq - self.window_frames
+        start_seq = self._next_trigger_seq - self.window_frames + 1
         real = [f for f in self._frames if f.seq >= start_seq]
         if len(real) < self.window_frames:
             real.extend([real[-1]] * (self.window_frames - len(real)))
@@ -78,6 +77,8 @@ class SlidingWindowBuffer:
             seed=self.seed + self._window_id,
             motion=motion,
             valid_frames=valid,
+            first_source_time_s=real[0].source_time_s,
+            last_source_time_s=real[min(valid + self.hop_frames - 1, len(real) - 1)].source_time_s,
         )
         self._window_id += 1
         self._next_trigger_seq += self.hop_frames
@@ -94,6 +95,8 @@ class SlidingWindowBuffer:
             seed=self.seed + self._window_id,
             motion=motion,
             valid_frames=valid_frames,
+            first_source_time_s=frames[0].source_time_s,
+            last_source_time_s=frames[-1].source_time_s,
         )
         self._window_id += 1
         return window

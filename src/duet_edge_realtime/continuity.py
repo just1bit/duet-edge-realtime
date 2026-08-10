@@ -17,7 +17,7 @@ class IdentityNormalizer:
 
 
 class OnlineContinuityProcessor:
-    """Incremental equivalent of render.py's parameter-space stitcher."""
+    """Online parameter-space alignment and overlap blending for generated windows."""
 
     def __init__(self, normalizer: Normalizer, horizon: int = 150, hop: int = 75):
         if horizon != 150 or hop != 75:

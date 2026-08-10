@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,58 @@ class NDJSONSink(Sink):
             self.handle = None
 
 
+class ViewerMailbox:
+    """A control-preserving mailbox with a bounded latest-frame lane."""
+
+    def __init__(self, frame_capacity: int):
+        self.frame_capacity = frame_capacity
+        self._items: deque[dict] = deque()
+        self._frame_count = 0
+        self._available = asyncio.Event()
+
+    def full(self) -> bool:
+        return self._frame_count >= self.frame_capacity
+
+    def put_nowait(self, message: dict) -> bool:
+        dropped = False
+        message_type = message.get("type")
+        if message_type == "frame":
+            if self.full():
+                for index, existing in enumerate(self._items):
+                    if existing.get("type") == "frame":
+                        del self._items[index]
+                        self._frame_count -= 1
+                        dropped = True
+                        break
+            self._frame_count += 1
+        elif message_type in {
+            "state", "metrics", "degraded", "backpressure", "overload"
+        }:
+            for index, existing in enumerate(self._items):
+                if existing.get("type") == message_type:
+                    del self._items[index]
+                    break
+        self._items.append(message)
+        self._available.set()
+        return dropped
+
+    def get_nowait(self) -> dict:
+        if not self._items:
+            raise asyncio.QueueEmpty
+        message = self._items.popleft()
+        if message.get("type") == "frame":
+            self._frame_count -= 1
+        if not self._items:
+            self._available.clear()
+        return message
+
+    async def get(self) -> dict:
+        while not self._items:
+            self._available.clear()
+            await self._available.wait()
+        return self.get_nowait()
+
+
 class WebSocketSink(Sink):
     def __init__(self, host: str, port: int, queue_frames: int, on_drop=None):
         self.host, self.port = host, port
@@ -43,37 +96,45 @@ class WebSocketSink(Sink):
         self.on_drop = on_drop
         self.server = None
         self.hello: dict | None = None
-        self.latest_status: dict | None = None
-        self.clients: dict[Any, tuple[asyncio.Queue, asyncio.Task]] = {}
+        self.latest_status: dict[str, dict] = {}
+        self.clients: dict[Any, tuple[ViewerMailbox, asyncio.Task]] = {}
 
     async def start(self, hello: dict) -> None:
         self.hello = hello
         self.server = await websockets.serve(self._handler, self.host, self.port)
 
     async def _handler(self, websocket) -> None:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_frames)
+        queue = ViewerMailbox(self.queue_frames)
         sender = asyncio.create_task(self._sender(websocket, queue))
         self.clients[websocket] = (queue, sender)
         try:
             await websocket.send(json.dumps(self.hello, separators=(",", ":")))
-            if self.latest_status is not None:
-                await websocket.send(json.dumps(self.latest_status, separators=(",", ":")))
+            for status in self.latest_status.values():
+                await websocket.send(json.dumps(status, separators=(",", ":")))
             await websocket.wait_closed()
         finally:
             self.clients.pop(websocket, None)
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
 
-    async def _sender(self, websocket, queue: asyncio.Queue) -> None:
+    async def _sender(self, websocket, queue: ViewerMailbox) -> None:
         while True:
             message = await queue.get()
             await websocket.send(json.dumps(message, separators=(",", ":"), allow_nan=False))
 
     async def send(self, message: dict) -> None:
-        if message.get("type") in {"metrics", "degraded", "eos", "error"}:
-            self.latest_status = message
+        message_type = message.get("type")
+        if message_type in {
+            "state", "metrics", "degraded", "backpressure", "overload", "eos", "error"
+        }:
+            self.latest_status[message_type] = message
         for queue, _ in list(self.clients.values()):
-            if queue.full():
+            if isinstance(queue, ViewerMailbox):
+                dropped = queue.put_nowait(message)
+                if dropped and self.on_drop:
+                    self.on_drop()
+                continue
+            if queue.full() and message_type == "frame":
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:

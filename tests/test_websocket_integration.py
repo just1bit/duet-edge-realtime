@@ -13,7 +13,7 @@ class WebSocketIntegrationTests(unittest.TestCase):
     def test_hello_frame_and_status_reconnect(self):
         async def scenario():
             sink = WebSocketSink("127.0.0.1", 18765, 4)
-            hello = {"type":"hello", "protocol":"duet-edge-stream/v1", "parents":[-1]+[0]*23}
+            hello = {"type":"hello", "protocol":"duet-edge-stream/v2", "parents":[-1]+[0]*23}
             await sink.start(hello)
             try:
                 async with websockets.connect("ws://127.0.0.1:18765") as client:
