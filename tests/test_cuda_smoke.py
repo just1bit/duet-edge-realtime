@@ -14,8 +14,8 @@ from helpers import identity_motion
 class CudaSmokeTests(unittest.TestCase):
     def test_single_window_is_finite_and_deterministic(self):
         checkpoint = os.environ["DUET_EDGE_CHECKPOINT"]
-        engine = os.environ.get("DUET_EDGE_ROOT", "third_party/duet-edge")
-        backend = CudaDuetEdgeBackend(checkpoint, engine, sampling_steps=10)
+        engine = os.environ["DUET_EDGE_ROOT"]
+        backend = CudaDuetEdgeBackend(checkpoint, engine, sampling_steps=50)
         backend.warmup()
         try:
             window = MotionWindow(1, 0, 150, 0.0, 123, identity_motion(150))

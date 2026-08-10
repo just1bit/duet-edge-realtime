@@ -1,48 +1,114 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
 @dataclass(frozen=True)
-class RealtimeConfig:
-    fps: int = 30
-    window_frames: int = 150
-    hop_frames: int = 75
+class PathsConfig:
+    duet_edge_root: str = ""
+    checkpoint: str = ""
+    input_motion: str = ""
+    output_dir: str = ""
+    root_scaled: bool | None = None
+
+
+@dataclass(frozen=True)
+class ModelConfig:
     guidance_music: float = 0.0
     guidance_lead: float = 2.0
     sampling_steps: int = 50
     eta: float = 1.0
+    seed: int = 1234
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.sampling_steps <= 1000:
+            raise ValueError("model.sampling_steps must be in [1, 1000]")
+        if self.eta < 0:
+            raise ValueError("model.eta must be non-negative")
+
+
+@dataclass(frozen=True)
+class StreamConfig:
+    fps: int = 30
+    window_frames: int = 150
+    hop_frames: int = 75
     playout_delay_s: float = 2.0
     inference_queue_size: int = 1
     viewer_queue_frames: int = 150
-    bind_host: str = "127.0.0.1"
-    port: int = 8765
-    duet_edge_root: str = "third_party/duet-edge"
 
     def __post_init__(self) -> None:
         if self.fps <= 0:
-            raise ValueError("fps must be positive")
+            raise ValueError("stream.fps must be positive")
         if self.window_frames != 150 or self.hop_frames != 75:
-            raise ValueError("V1 requires window_frames=150 and hop_frames=75")
-        if not 1 <= self.sampling_steps <= 1000:
-            raise ValueError("sampling_steps must be in [1, 1000]")
-        if self.eta < 0:
-            raise ValueError("eta must be non-negative")
+            raise ValueError("V1 requires stream.window_frames=150 and hop_frames=75")
         if not 0 <= self.playout_delay_s < self.hop_frames / self.fps:
-            raise ValueError("playout_delay_s must be in [0, hop period)")
+            raise ValueError("stream.playout_delay_s must be in [0, hop period)")
         if self.inference_queue_size != 1:
-            raise ValueError("V1 inference_queue_size must be 1")
+            raise ValueError("V1 stream.inference_queue_size must be 1")
         if self.viewer_queue_frames < 1:
-            raise ValueError("viewer_queue_frames must be positive")
+            raise ValueError("stream.viewer_queue_frames must be positive")
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    bind_host: str = "127.0.0.1"
+    port: int = 8765
+
+    def __post_init__(self) -> None:
         if not 1 <= self.port <= 65535:
-            raise ValueError("port must be in [1, 65535]")
+            raise ValueError("server.port must be in [1, 65535]")
+
+
+@dataclass(frozen=True)
+class RealtimeConfig:
+    backend: str = "fake"
+    paths: PathsConfig = field(default_factory=PathsConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    stream: StreamConfig = field(default_factory=StreamConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
+
+    def __post_init__(self) -> None:
+        if self.backend not in {"fake", "cuda"}:
+            raise ValueError("backend must be fake or cuda")
 
     @classmethod
     def load(cls, path: str | Path) -> "RealtimeConfig":
         with Path(path).open(encoding="utf-8") as handle:
-            return cls(**json.load(handle))
+            data = json.load(handle)
+        return cls(
+            backend=data.get("backend", "fake"),
+            paths=PathsConfig(**data.get("paths", {})),
+            model=ModelConfig(**data.get("model", {})),
+            stream=StreamConfig(**data.get("stream", {})),
+            server=ServerConfig(**data.get("server", {})),
+        )
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+    # Read-only conveniences keep runtime code concise while serialized
+    # configuration remains grouped by paths/model/stream/server.
+    @property
+    def fps(self): return self.stream.fps
+    @property
+    def window_frames(self): return self.stream.window_frames
+    @property
+    def hop_frames(self): return self.stream.hop_frames
+    @property
+    def playout_delay_s(self): return self.stream.playout_delay_s
+    @property
+    def viewer_queue_frames(self): return self.stream.viewer_queue_frames
+    @property
+    def guidance_music(self): return self.model.guidance_music
+    @property
+    def guidance_lead(self): return self.model.guidance_lead
+    @property
+    def sampling_steps(self): return self.model.sampling_steps
+    @property
+    def eta(self): return self.model.eta
+    @property
+    def bind_host(self): return self.server.bind_host
+    @property
+    def port(self): return self.server.port

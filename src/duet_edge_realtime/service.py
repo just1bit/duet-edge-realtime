@@ -4,6 +4,9 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import re
+import subprocess
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -23,17 +26,32 @@ from .window_buffer import SlidingWindowBuffer
 
 LOG = logging.getLogger("duet_edge_realtime")
 STOP = object()
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def realtime_repository_info() -> dict:
+    def git(*args):
+        result = subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), *args],
+            text=True, capture_output=True, check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    return {
+        "realtime_root": str(REPOSITORY_ROOT),
+        "realtime_commit": git("rev-parse", "HEAD"),
+        "realtime_dirty": bool(git("status", "--porcelain", "--untracked-files=all")),
+    }
 
 
 class StreamingService:
-    def __init__(self, config, backend, source, sink, clock, summary_path):
+    def __init__(self, config, backend, source, sink, clock, summary_path, run_id=None):
         self.config = config
         self.backend = backend
         self.source = source
         self.sink = sink
         self.clock = clock
         self.summary_path = Path(summary_path)
-        self.run_id = str(uuid.uuid4())
+        self.run_id = run_id or str(uuid.uuid4())
         self.metrics = RunMetrics(self.run_id)
         self._start_clock = clock.now()
         self._inference_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
@@ -59,10 +77,24 @@ class StreamingService:
         try:
             await self.sink.start(self.hello())
             sink_ready = True
-            async with asyncio.TaskGroup() as group:
-                group.create_task(self._produce_input())
-                group.create_task(self._run_inference())
-                group.create_task(self._run_playout())
+            tasks = [
+                asyncio.create_task(self._produce_input()),
+                asyncio.create_task(self._run_inference()),
+                asyncio.create_task(self._run_playout()),
+            ]
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_EXCEPTION
+            )
+            error = next(
+                (task.exception() for task in done if not task.cancelled() and task.exception()),
+                None,
+            )
+            if error is not None:
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                raise error
+            await asyncio.gather(*pending)
             self.metrics.exit_reason = "input_complete"
             await self.sink.send({
                 "type": "eos",
@@ -70,13 +102,6 @@ class StreamingService:
                 "frames": self.metrics.output_frames,
                 "reason": "input_complete",
             })
-        except BaseExceptionGroup as group:
-            errors = [str(exc) for exc in group.exceptions]
-            self.metrics.errors.extend(errors)
-            self.metrics.exit_reason = "error"
-            if sink_ready:
-                await self.sink.send({"type": "error", "run_id": self.run_id, "errors": errors})
-            raise
         except Exception as exc:
             self.metrics.errors.append(str(exc))
             self.metrics.exit_reason = "error"
@@ -86,7 +111,7 @@ class StreamingService:
         finally:
             self.metrics.write(
                 self.summary_path,
-                self.backend.version_info(),
+                {**realtime_repository_info(), **self.backend.version_info()},
                 self.config.as_dict(),
             )
             await self.sink.close()
@@ -94,7 +119,7 @@ class StreamingService:
             self.backend.close()
 
     async def _produce_input(self) -> None:
-        buffer = SlidingWindowBuffer(seed=42)
+        buffer = SlidingWindowBuffer(seed=self.config.model.seed)
         source_start = self.clock.now()
         for frame in self.source.frames():
             await self.clock.sleep_until(source_start + frame.seq / self.config.fps)
@@ -200,49 +225,101 @@ class StreamingService:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Duet-EDGE V1 streaming service")
-    parser.add_argument("--config", default="configs/realtime_v1.json")
-    parser.add_argument("--backend", choices=("fake", "cuda"), default="fake")
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--input-format", choices=("fixture", "aist"), default="fixture")
+    parser.add_argument("--config", default="configs/v1.fake.json")
+    parser.add_argument("--backend", choices=("fake", "cuda"))
+    parser.add_argument("--input")
+    parser.add_argument("--input-format", choices=("fixture", "aist"))
     parser.add_argument("--root-scaled", choices=("true", "false"))
     parser.add_argument("--checkpoint")
     parser.add_argument("--duet-edge-root")
     parser.add_argument("--clock", choices=("virtual", "realtime"), default="virtual")
     parser.add_argument("--sink", default="ndjson", help="comma-separated: ndjson,websocket")
-    parser.add_argument("--output-dir", default="outputs/latest")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--run-id")
     parser.add_argument("--loop", type=int, default=1)
     parser.add_argument("--fake-delay-s", type=float, default=0.0)
     parser.add_argument("--sampling-steps", type=int)
     parser.add_argument("--playout-delay-s", type=float)
-    parser.add_argument("--require-clean-engine", action="store_true")
+    parser.add_argument("--allow-engine-mismatch", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
 
 async def _async_main(args: argparse.Namespace) -> None:
     config = RealtimeConfig.load(args.config)
-    overrides = {}
+    backend_name = args.backend or config.backend
+    model = config.model
+    stream = config.stream
     if args.sampling_steps is not None:
-        overrides["sampling_steps"] = args.sampling_steps
+        model = replace(model, sampling_steps=args.sampling_steps)
     if args.playout_delay_s is not None:
-        overrides["playout_delay_s"] = args.playout_delay_s
-    if overrides:
-        config = replace(config, **overrides)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if args.backend == "fake":
+        stream = replace(stream, playout_delay_s=args.playout_delay_s)
+
+    def resolved_path(cli_value, env_name, json_value, *, required=False):
+        value = cli_value or os.environ.get(env_name) or json_value
+        if required and not value:
+            raise SystemExit(
+                f"missing path: use CLI, {env_name}, or config JSON"
+            )
+        return str(Path(value).expanduser().resolve()) if value else ""
+
+    engine_root = resolved_path(
+        args.duet_edge_root, "DUET_EDGE_ROOT", config.paths.duet_edge_root,
+        required=backend_name == "cuda",
+    )
+    checkpoint = resolved_path(
+        args.checkpoint, "EDGE_CHECKPOINT", config.paths.checkpoint,
+        required=backend_name == "cuda",
+    )
+    input_path = resolved_path(
+        args.input, "EDGE_INPUT_MOTION", config.paths.input_motion, required=True
+    )
+    output_base = resolved_path(
+        args.output_dir, "EDGE_OUTPUT_DIR", config.paths.output_dir, required=True
+    )
+    run_id = args.run_id or str(uuid.uuid4())
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+        raise SystemExit("--run-id must use 1-128 letters, digits, dot, underscore or dash")
+    output_dir = Path(output_base) / run_id
+    if output_dir.exists():
+        raise SystemExit(f"refusing to overwrite existing run directory: {output_dir}")
+    output_dir.mkdir(parents=True)
+
+    root_scaled = (
+        args.root_scaled == "true"
+        if args.root_scaled is not None
+        else config.paths.root_scaled
+    )
+    config = replace(
+        config,
+        backend=backend_name,
+        paths=replace(
+            config.paths,
+            duet_edge_root=engine_root,
+            checkpoint=checkpoint,
+            input_motion=input_path,
+            output_dir=str(output_dir),
+            root_scaled=root_scaled,
+        ),
+        model=model,
+        stream=stream,
+    )
+    effective_config = {"run_id": run_id, **config.as_dict()}
+    (output_dir / "effective_config.json").write_text(
+        json.dumps(effective_config, indent=2) + "\n", encoding="utf-8"
+    )
+
+    if backend_name == "fake":
         backend = FakeInferenceBackend(delay_s=args.fake_delay_s)
     else:
-        if not args.checkpoint:
-            raise SystemExit("--checkpoint is required for the CUDA backend")
         backend = CudaDuetEdgeBackend(
-            args.checkpoint,
-            args.duet_edge_root or config.duet_edge_root,
+            checkpoint,
+            engine_root,
             guidance_music=config.guidance_music,
             guidance_lead=config.guidance_lead,
             sampling_steps=config.sampling_steps,
             eta=config.eta,
-            require_clean_engine=args.require_clean_engine,
+            allow_engine_mismatch=args.allow_engine_mismatch,
         )
     warmup_started = time.perf_counter()
     try:
@@ -254,22 +331,29 @@ async def _async_main(args: argparse.Namespace) -> None:
         try:
             backend_info = backend.version_info()
         except Exception:
-            backend_info = {"backend": args.backend}
-        failed.write(output_dir / "summary.json", backend_info, config.as_dict())
+            backend_info = {"backend": backend_name}
+        failed.write(
+            output_dir / "summary.json",
+            {**realtime_repository_info(), **backend_info},
+            config.as_dict(),
+        )
         backend.close()
         raise
     warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
 
-    if args.input_format == "fixture":
-        source = NormalizedFixtureAdapter(args.input, config.fps, loop=args.loop)
+    input_format = args.input_format or ("fixture" if backend_name == "fake" else "aist")
+    if input_format == "fixture":
+        source = NormalizedFixtureAdapter(input_path, config.fps, loop=args.loop)
     else:
-        if args.root_scaled is None:
+        if backend_name != "cuda":
+            raise SystemExit("AIST preprocessing requires the CUDA Duet-EDGE backend")
+        if root_scaled is None:
             raise SystemExit("AIST input requires explicit --root-scaled true|false")
         source = AISTFileReplayAdapter(
-            args.input,
+            input_path,
             backend.edge.normalizer,
-            args.duet_edge_root or config.duet_edge_root,
-            root_scaled=args.root_scaled == "true",
+            engine_root,
+            root_scaled=root_scaled,
             fps=config.fps,
         )
 
@@ -290,11 +374,15 @@ async def _async_main(args: argparse.Namespace) -> None:
         raise SystemExit("at least one sink is required")
     clock = VirtualClock() if args.clock == "virtual" else RealtimeClock()
     service = StreamingService(
-        config, backend, source, CompositeSink(sinks), clock, output_dir / "summary.json"
+        config, backend, source, CompositeSink(sinks), clock,
+        output_dir / "summary.json", run_id=run_id,
     )
     service.metrics.model_load_warmup_ms = warmup_ms
     metrics_ref = service.metrics
-    LOG.info("run_id=%s backend=%s input=%s", service.run_id, args.backend, args.input)
+    LOG.info(
+        "run_id=%s backend=%s input=%s output=%s",
+        service.run_id, backend_name, input_path, output_dir,
+    )
     await service.run()
 
 

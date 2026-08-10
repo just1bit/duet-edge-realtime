@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from duet_edge_realtime.backends.fake import FakeInferenceBackend
-from duet_edge_realtime.config import RealtimeConfig
+from duet_edge_realtime.config import RealtimeConfig, StreamConfig
 from duet_edge_realtime.input_adapters import NormalizedFixtureAdapter
 from duet_edge_realtime.playout import VirtualClock
 from duet_edge_realtime.service import StreamingService
@@ -23,7 +23,7 @@ class ProtocolTests(unittest.TestCase):
             np.savez(root / "fixture.npz", motion_151=identity_motion(300))
             source = NormalizedFixtureAdapter(root / "fixture.npz")
             service = StreamingService(
-                RealtimeConfig(playout_delay_s=2.0),
+                RealtimeConfig(stream=StreamConfig(playout_delay_s=2.0)),
                 FakeInferenceBackend(),
                 source,
                 CompositeSink([NDJSONSink(root / "stream.ndjson")]),
@@ -69,7 +69,7 @@ class ProtocolTests(unittest.TestCase):
                 CompositeSink([NDJSONSink(root / "stream.ndjson")]),
                 VirtualClock(), root / "summary.json",
             )
-            with self.assertRaises(ExceptionGroup):
+            with self.assertRaises(RuntimeError):
                 asyncio.run(service.run())
             summary = json.loads((root / "summary.json").read_text())
             self.assertEqual(summary["exit_reason"], "error")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ import numpy as np
 from ..schemas import GeneratedChunk, MotionWindow
 from .base import InferenceBackend
 
-EXPECTED_ENGINE_COMMIT = "e6a731106b912c1a4a8856b2a082d58cd9b93d3d"
+DEFAULT_LOCK_PATH = Path(__file__).resolve().parents[3] / "compat" / "duet-edge.lock.json"
 
 
 class CudaDuetEdgeBackend(InferenceBackend):
@@ -24,7 +25,8 @@ class CudaDuetEdgeBackend(InferenceBackend):
         guidance_lead: float = 2.0,
         sampling_steps: int = 50,
         eta: float = 1.0,
-        require_clean_engine: bool = False,
+        lock_path: str | Path = DEFAULT_LOCK_PATH,
+        allow_engine_mismatch: bool = False,
     ):
         self.checkpoint = Path(checkpoint).resolve()
         self.engine_root = Path(duet_edge_root).resolve()
@@ -32,25 +34,20 @@ class CudaDuetEdgeBackend(InferenceBackend):
         self.guidance_lead = guidance_lead
         self.sampling_steps = sampling_steps
         self.eta = eta
-        self.require_clean_engine = require_clean_engine
+        self.lock_path = Path(lock_path).resolve()
+        self.allow_engine_mismatch = allow_engine_mismatch
         self.edge = None
         self.torch = None
         self._zero_music = None
+        self._engine_commit = "unknown"
+        self._engine_dirty = False
+        self._engine_python_dirty = False
+        self._non_reproducible = False
 
     def warmup(self) -> None:
         if not self.checkpoint.is_file():
             raise FileNotFoundError(self.checkpoint)
-        if not (self.engine_root / "EDGE.py").is_file():
-            raise FileNotFoundError(f"invalid duet-edge root: {self.engine_root}")
-        status = self._git("status", "--porcelain")
-        if self.require_clean_engine and status:
-            raise RuntimeError("formal acceptance requires a clean duet-edge worktree")
-        commit = self._git("rev-parse", "HEAD")
-        if self.require_clean_engine and commit != EXPECTED_ENGINE_COMMIT:
-            raise RuntimeError(
-                "formal acceptance requires duet-edge commit "
-                f"{EXPECTED_ENGINE_COMMIT}, got {commit}"
-            )
+        self._validate_compatibility()
         if str(self.engine_root) not in sys.path:
             sys.path.insert(0, str(self.engine_root))
         import torch
@@ -59,6 +56,11 @@ class CudaDuetEdgeBackend(InferenceBackend):
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA backend requires torch.cuda.is_available()")
         self.torch = torch
+        checkpoint = torch.load(self.checkpoint, map_location="cpu")
+        missing_keys = {"ema_state_dict", "normalizer"} - set(checkpoint)
+        del checkpoint
+        if missing_keys:
+            raise ValueError(f"checkpoint is missing required keys: {sorted(missing_keys)}")
         self.edge = EDGE(
             "jukebox",
             checkpoint_path=str(self.checkpoint),
@@ -80,6 +82,37 @@ class CudaDuetEdgeBackend(InferenceBackend):
                 )
             )
 
+    def _validate_compatibility(self) -> None:
+        required = ("EDGE.py", "model/diffusion.py", "vis.py")
+        missing_files = [name for name in required if not (self.engine_root / name).is_file()]
+        if missing_files:
+            raise FileNotFoundError(
+                f"invalid DUET_EDGE_ROOT {self.engine_root}; missing {missing_files}"
+            )
+        if not self.lock_path.is_file():
+            raise FileNotFoundError(f"missing compatibility lock: {self.lock_path}")
+        lock = json.loads(self.lock_path.read_text(encoding="utf-8"))
+        expected_commit = lock["commit"]
+        self._engine_commit = self._git("rev-parse", "HEAD")
+        self._engine_dirty = bool(self._git("status", "--porcelain", "--untracked-files=all"))
+        python_status = self._git(
+            "status", "--porcelain", "--untracked-files=all", "--", ":(glob)**/*.py"
+        )
+        self._engine_python_dirty = bool(python_status)
+        mismatches = []
+        if self._engine_commit != expected_commit:
+            mismatches.append(
+                f"commit expected {expected_commit}, got {self._engine_commit}"
+            )
+        if self._engine_python_dirty:
+            mismatches.append("Python source worktree is dirty")
+        self._non_reproducible = bool(mismatches)
+        if mismatches and not self.allow_engine_mismatch:
+            raise RuntimeError(
+                "Duet-EDGE compatibility check failed: " + "; ".join(mismatches)
+                + ". Use --allow-engine-mismatch only for development."
+            )
+
     def infer(self, window: MotionWindow) -> GeneratedChunk:
         if self.edge is None or self.torch is None:
             raise RuntimeError("warmup() must be called before infer()")
@@ -94,12 +127,21 @@ class CudaDuetEdgeBackend(InferenceBackend):
         started = time.perf_counter()
         start_event.record()
         with torch.inference_mode():
-            sample = self.edge.diffusion.ddim_sample(
-                (1, 150, 151),
-                cond,
-                sampling_timesteps=self.sampling_steps,
-                eta=self.eta,
-            )
+            if self.sampling_steps == 50 and self.eta == 1.0:
+                # The locked baseline engine hard-codes these defaults.
+                sample = self.edge.diffusion.ddim_sample((1, 150, 151), cond)
+            else:
+                try:
+                    sample = self.edge.diffusion.ddim_sample(
+                        (1, 150, 151), cond,
+                        sampling_timesteps=self.sampling_steps,
+                        eta=self.eta,
+                    )
+                except TypeError as exc:
+                    raise RuntimeError(
+                        "non-default DDIM settings require a compatible external "
+                        "Duet-EDGE optimization commit"
+                    ) from exc
         end_event.record()
         torch.cuda.synchronize()
         wall_ms = (time.perf_counter() - started) * 1000.0
@@ -144,9 +186,12 @@ class CudaDuetEdgeBackend(InferenceBackend):
         return {
             "backend": "cuda",
             "engine_root": str(self.engine_root),
-            "engine_commit": self._git("rev-parse", "HEAD"),
-            "engine_dirty": bool(self._git("status", "--porcelain")),
-            "expected_engine_commit": EXPECTED_ENGINE_COMMIT,
+            "engine_repository": json.loads(self.lock_path.read_text())["repository"],
+            "engine_commit": self._engine_commit,
+            "engine_dirty": self._engine_dirty,
+            "engine_python_dirty": self._engine_python_dirty,
+            "expected_engine_commit": json.loads(self.lock_path.read_text())["commit"],
+            "non_reproducible": self._non_reproducible,
             "checkpoint": str(self.checkpoint),
             "checkpoint_bytes": self.checkpoint.stat().st_size,
             "checkpoint_sha256": digest.hexdigest(),

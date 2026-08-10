@@ -23,11 +23,12 @@ def main():
     if any(not all(math.isfinite(v) for joint in m["joints"] for v in joint) for m in frames): failures.append("NaN/Inf")
     if summary["output"]["frames"] != len(frames): failures.append("summary/NDJSON frame mismatch")
     if summary["queues"]["overloads"] != 0: failures.append("inference overload")
-    if args.duration_min > 0 and frames and frames[-1]["motion_time_s"] + 1 / summary["config"]["fps"] < args.duration_min * 60:
+    stream_config = summary["config"]["stream"]
+    if args.duration_min > 0 and frames and frames[-1]["motion_time_s"] + 1 / stream_config["fps"] < args.duration_min * 60:
         failures.append(f"stream shorter than requested {args.duration_min} minutes")
     if args.require_performance:
         p99 = summary["inference"]["p99_ms"]
-        delay_ms = summary["config"]["playout_delay_s"] * 1000
+        delay_ms = stream_config["playout_delay_s"] * 1000
         if p99 is None or p99 + 100 >= 2500: failures.append("p99+100ms is not <2.5s")
         if p99 is None or p99 + 100 > delay_ms: failures.append("playout delay does not cover p99+100ms")
         if summary["output"]["underflows"] != 0: failures.append("output underflow")

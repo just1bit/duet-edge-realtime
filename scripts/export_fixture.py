@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,12 +15,14 @@ from duet_edge_realtime.schemas import MotionWindow
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--duet-edge-root", default="third_party/duet-edge")
+    parser.add_argument("--duet-edge-root", default=os.environ.get("DUET_EDGE_ROOT"))
     parser.add_argument("--motion", required=True)
     parser.add_argument("--root-scaled", required=True, choices=("true","false"))
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=50)
     args = parser.parse_args()
+    if not args.duet_edge_root:
+        raise SystemExit("provide --duet-edge-root or DUET_EDGE_ROOT")
     backend = CudaDuetEdgeBackend(args.checkpoint, args.duet_edge_root, sampling_steps=args.steps)
     backend.warmup()
     try:

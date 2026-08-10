@@ -7,13 +7,14 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root")
+    parser.add_argument("--pattern", default="steps-*/summary.json")
     parser.add_argument("--output", default="benchmark.json")
     args = parser.parse_args()
     rows = []
-    for path in sorted(Path(args.root).glob("steps-*/summary.json")):
+    for path in sorted(Path(args.root).glob(args.pattern)):
         data = json.loads(path.read_text())
         rows.append({
-            "steps": data["config"]["sampling_steps"],
+            "steps": data["config"]["model"]["sampling_steps"],
             "p50_ms": data["inference"]["p50_ms"],
             "p95_ms": data["inference"]["p95_ms"],
             "p99_ms": data["inference"]["p99_ms"],

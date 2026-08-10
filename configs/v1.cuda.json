@@ -1,0 +1,29 @@
+{
+  "backend": "cuda",
+  "paths": {
+    "duet_edge_root": "/data/zliu753/EDGE",
+    "checkpoint": "/data/zliu753/EDGE/runs/train/exp9/weights/train-1800.pt",
+    "input_motion": "/data/zliu753/EDGE/data/val/motions/example.pkl",
+    "output_dir": "/data/zliu753/realtime-runs",
+    "root_scaled": false
+  },
+  "model": {
+    "guidance_music": 0.0,
+    "guidance_lead": 2.0,
+    "sampling_steps": 50,
+    "eta": 1.0,
+    "seed": 1234
+  },
+  "stream": {
+    "fps": 30,
+    "window_frames": 150,
+    "hop_frames": 75,
+    "playout_delay_s": 2.0,
+    "inference_queue_size": 1,
+    "viewer_queue_frames": 150
+  },
+  "server": {
+    "bind_host": "127.0.0.1",
+    "port": 8765
+  }
+}
