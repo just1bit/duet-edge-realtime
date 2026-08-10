@@ -1,0 +1,3 @@
+[submodule "third_party/duet-edge"]
+	path = third_party/duet-edge
+	url = https://github.com/just1bit/duet-edge.git

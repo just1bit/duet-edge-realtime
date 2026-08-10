@@ -1,0 +1,98 @@
+import asyncio
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+from duet_edge_realtime.backends.fake import FakeInferenceBackend
+from duet_edge_realtime.config import RealtimeConfig
+from duet_edge_realtime.input_adapters import NormalizedFixtureAdapter
+from duet_edge_realtime.playout import VirtualClock
+from duet_edge_realtime.service import StreamingService
+from duet_edge_realtime.sinks import CompositeSink, NDJSONSink
+
+from helpers import identity_motion
+
+
+class ProtocolTests(unittest.TestCase):
+    def test_fake_e2e_protocol_and_summary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            np.savez(root / "fixture.npz", motion_151=identity_motion(300))
+            source = NormalizedFixtureAdapter(root / "fixture.npz")
+            service = StreamingService(
+                RealtimeConfig(playout_delay_s=2.0),
+                FakeInferenceBackend(),
+                source,
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                VirtualClock(),
+                root / "summary.json",
+            )
+            asyncio.run(service.run())
+            messages = [json.loads(line) for line in (root / "stream.ndjson").read_text().splitlines()]
+            self.assertEqual(messages[0]["type"], "hello")
+            self.assertEqual(len(messages[0]["parents"]), 24)
+            frames = [message for message in messages if message["type"] == "frame"]
+            self.assertEqual(len(frames), 300)
+            self.assertEqual([frame["seq"] for frame in frames], list(range(300)))
+            self.assertTrue(all(len(frame["joints"]) == 24 for frame in frames))
+            self.assertEqual(messages[-1]["type"], "eos")
+            summary = json.loads((root / "summary.json").read_text())
+            self.assertEqual(summary["output"]["frames"], 300)
+            self.assertEqual(summary["inference"]["count"], 3)
+            self.assertEqual(summary["queues"]["overloads"], 0)
+
+    def test_partial_tail_preserves_exact_length(self):
+        for count in (151, 224):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                np.savez(root / "fixture.npz", motion_151=identity_motion(count))
+                service = StreamingService(
+                    RealtimeConfig(), FakeInferenceBackend(),
+                    NormalizedFixtureAdapter(root / "fixture.npz"),
+                    CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                    VirtualClock(), root / "summary.json",
+                )
+                asyncio.run(service.run())
+                messages = [json.loads(x) for x in (root / "stream.ndjson").read_text().splitlines()]
+                self.assertEqual(sum(m["type"] == "frame" for m in messages), count)
+
+    def test_backend_failure_writes_partial_summary_and_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            np.savez(root / "fixture.npz", motion_151=identity_motion(225))
+            service = StreamingService(
+                RealtimeConfig(), FakeInferenceBackend(fail_window=1),
+                NormalizedFixtureAdapter(root / "fixture.npz"),
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                VirtualClock(), root / "summary.json",
+            )
+            with self.assertRaises(ExceptionGroup):
+                asyncio.run(service.run())
+            summary = json.loads((root / "summary.json").read_text())
+            self.assertEqual(summary["exit_reason"], "error")
+            self.assertTrue(summary["errors"])
+            messages = [json.loads(x) for x in (root / "stream.ndjson").read_text().splitlines()]
+            self.assertTrue(any(m["type"] == "error" for m in messages))
+
+    def test_virtual_playout_deadlines_are_exact(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            np.savez(root / "fixture.npz", motion_151=identity_motion(150))
+            service = StreamingService(
+                RealtimeConfig(), FakeInferenceBackend(),
+                NormalizedFixtureAdapter(root / "fixture.npz"),
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                VirtualClock(), root / "summary.json",
+            )
+            asyncio.run(service.run())
+            frames = [json.loads(x) for x in (root / "stream.ndjson").read_text().splitlines()]
+            frames = [x for x in frames if x["type"] == "frame"]
+            differences = np.diff([x["motion_time_s"] for x in frames])
+            np.testing.assert_allclose(differences, 1/30, atol=1e-12)
+
+
+if __name__ == "__main__":
+    unittest.main()

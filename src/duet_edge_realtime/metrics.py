@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import json
+import math
+import platform
+import statistics
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = (len(ordered) - 1) * fraction
+    low, high = math.floor(index), math.ceil(index)
+    if low == high:
+        return ordered[low]
+    return ordered[low] * (high - index) + ordered[high] * (index - low)
+
+
+@dataclass
+class RunMetrics:
+    run_id: str
+    started_wall_s: float = field(default_factory=time.time)
+    input_frames: int = 0
+    output_frames: int = 0
+    input_first_clock_s: float | None = None
+    input_last_clock_s: float | None = None
+    output_first_clock_s: float | None = None
+    output_last_clock_s: float | None = None
+    model_load_warmup_ms: float | None = None
+    window_count: int = 0
+    windows: deque = field(default_factory=lambda: deque(maxlen=256))
+    inference_count: int = 0
+    inference_wall_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
+    inference_cuda_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
+    jitter_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
+    input_backlog_high_water: int = 0
+    output_backlog_high_water: int = 0
+    dropped_view_frames: int = 0
+    underflows: int = 0
+    overloads: int = 0
+    sequence_errors: int = 0
+    errors: list[str] = field(default_factory=list)
+    exit_reason: str = "running"
+
+    def record_inference(self, window, chunk) -> None:
+        self.window_count += 1
+        self.inference_count += 1
+        self.windows.append({
+            "window_id": window.window_id,
+            "start_seq": window.start_seq,
+            "end_seq": window.end_seq,
+            "valid_frames": window.valid_frames,
+            "trigger_time_s": window.trigger_time_s,
+        })
+        self.inference_wall_ms.append(chunk.inference_wall_ms)
+        if chunk.inference_cuda_ms is not None:
+            self.inference_cuda_ms.append(chunk.inference_cuda_ms)
+
+    def live_message(self) -> dict:
+        return {
+            "type": "metrics",
+            "inference_p95_ms": percentile(self.inference_wall_ms, 0.95),
+            "input_backlog": self.input_backlog_high_water,
+            "output_backlog": self.output_backlog_high_water,
+            "dropped_view_frames": self.dropped_view_frames,
+            "underflow": self.underflows,
+        }
+
+    def summary(self, backend: dict, config: dict) -> dict:
+        elapsed = max(time.time() - self.started_wall_s, 1e-9)
+        input_span = (
+            self.input_last_clock_s - self.input_first_clock_s
+            if self.input_first_clock_s is not None and self.input_last_clock_s is not None
+            else 0.0
+        )
+        output_span = (
+            self.output_last_clock_s - self.output_first_clock_s
+            if self.output_first_clock_s is not None and self.output_last_clock_s is not None
+            else 0.0
+        )
+        return {
+            "run_id": self.run_id,
+            "exit_reason": self.exit_reason,
+            "started_wall_s": self.started_wall_s,
+            "finished_wall_s": time.time(),
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "config": config,
+            "backend": backend,
+            "model_load_warmup_ms": self.model_load_warmup_ms,
+            "input": {
+                "frames": self.input_frames,
+                "observed_fps": ((self.input_frames - 1) / input_span if input_span > 0 else None),
+                "sequence_errors": self.sequence_errors,
+            },
+            "windows": {
+                "count": self.window_count,
+                "recent": list(self.windows),
+                "recent_limit": self.windows.maxlen,
+            },
+            "inference": {
+                "count": self.inference_count,
+                "sample_count": len(self.inference_wall_ms),
+                "sample_limit": self.inference_wall_ms.maxlen,
+                "wall_ms": list(self.inference_wall_ms),
+                "cuda_ms": list(self.inference_cuda_ms),
+                "p50_ms": percentile(self.inference_wall_ms, 0.50),
+                "p95_ms": percentile(self.inference_wall_ms, 0.95),
+                "p99_ms": percentile(self.inference_wall_ms, 0.99),
+            },
+            "queues": {
+                "inference_high_water": self.input_backlog_high_water,
+                "output_high_water": self.output_backlog_high_water,
+                "overloads": self.overloads,
+            },
+            "output": {
+                "frames": self.output_frames,
+                "observed_fps": ((self.output_frames - 1) / output_span if output_span > 0 else None),
+                "first_frame_latency_s": (
+                    self.output_first_clock_s - self.input_first_clock_s
+                    if self.output_first_clock_s is not None and self.input_first_clock_s is not None
+                    else None
+                ),
+                "jitter_p95_ms": percentile(self.jitter_ms, 0.95),
+                "jitter_mean_ms": statistics.fmean(self.jitter_ms) if self.jitter_ms else None,
+                "underflows": self.underflows,
+                "dropped_view_frames": self.dropped_view_frames,
+            },
+            "errors": self.errors,
+        }
+
+    def write(self, path: str | Path, backend: dict, config: dict) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(self.summary(backend, config), indent=2) + "\n", encoding="utf-8")
