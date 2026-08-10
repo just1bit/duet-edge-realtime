@@ -43,6 +43,8 @@ class RunMetrics:
     input_backlog_high_water: int = 0
     output_backlog_high_water: int = 0
     dropped_view_frames: int = 0
+    dropped_view_frames_by_client: dict[str, int] = field(default_factory=dict)
+    viewer_client_sample_limit: int = 256
     underflows: int = 0
     overloads: int = 0
     backpressure_waits: int = 0
@@ -82,6 +84,7 @@ class RunMetrics:
             "input_backlog": self.input_backlog_high_water,
             "output_backlog": self.output_backlog_high_water,
             "dropped_view_frames": self.dropped_view_frames,
+            "dropped_view_frames_by_client": dict(self.dropped_view_frames_by_client),
             "underflow": self.underflows,
             "inference_deadline_misses": self.inference_deadline_misses,
             "backpressure_waits": self.backpressure_waits,
@@ -98,6 +101,18 @@ class RunMetrics:
         self.committed_batches += 1
         self.committed_frames += frame_count
 
+    def record_view_drop(self, client_id: str) -> None:
+        self.dropped_view_frames += 1
+        key = client_id
+        if (
+            key not in self.dropped_view_frames_by_client
+            and len(self.dropped_view_frames_by_client) >= self.viewer_client_sample_limit - 1
+        ):
+            key = "other"
+        self.dropped_view_frames_by_client[key] = (
+            self.dropped_view_frames_by_client.get(key, 0) + 1
+        )
+
     def summary(self, backend: dict, config: dict) -> dict:
         input_span = (
             self.input_last_clock_s - self.input_first_clock_s
@@ -112,6 +127,9 @@ class RunMetrics:
         stream_config = config["stream"]
         hop_period_ms = stream_config["hop_frames"] / stream_config["fps"] * 1000.0
         inference_p99_ms = percentile(self.inference_wall_ms, 0.99)
+        cuda_p50_ms = percentile(self.inference_cuda_ms, 0.50)
+        cuda_p95_ms = percentile(self.inference_cuda_ms, 0.95)
+        cuda_p99_ms = percentile(self.inference_cuda_ms, 0.99)
         jitter_p95_ms = percentile(self.jitter_ms, 0.95)
         return {
             "run_id": self.run_id,
@@ -142,6 +160,9 @@ class RunMetrics:
                 "p50_ms": percentile(self.inference_wall_ms, 0.50),
                 "p95_ms": percentile(self.inference_wall_ms, 0.95),
                 "p99_ms": inference_p99_ms,
+                "cuda_p50_ms": cuda_p50_ms,
+                "cuda_p95_ms": cuda_p95_ms,
+                "cuda_p99_ms": cuda_p99_ms,
                 "deadline_misses": self.inference_deadline_misses,
                 "configured_slo_ms": stream_config["inference_slo_ms"],
                 "hop_period_ms": hop_period_ms,
@@ -173,6 +194,10 @@ class RunMetrics:
                 "end_to_end_latency_p95_ms": percentile(self.end_to_end_latency_ms, 0.95),
                 "underflows": self.underflows,
                 "dropped_view_frames": self.dropped_view_frames,
+                "dropped_view_frames_by_client": dict(
+                    self.dropped_view_frames_by_client
+                ),
+                "viewer_client_sample_limit": self.viewer_client_sample_limit,
                 "committed_batches": self.committed_batches,
                 "committed_frames": self.committed_frames,
             },

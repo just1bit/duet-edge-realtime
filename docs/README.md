@@ -97,4 +97,5 @@ inference_p99 + 100ms < hop_period
 playout_delay >= inference_p99 + 100ms
 ```
 
-完整单机验收步骤和质量门槛见 [ACCEPTANCE_EXECUTION_CN.md](ACCEPTANCE_EXECUTION_CN.md)。
+完整单机验收步骤和质量门槛见
+[V1_ACCEPTANCE_EXECUTION_CN.md](V1_ACCEPTANCE_EXECUTION_CN.md)。

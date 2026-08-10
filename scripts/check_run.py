@@ -11,6 +11,8 @@ def main():
     parser.add_argument("--ndjson", required=True)
     parser.add_argument("--duration-min", type=float, default=0)
     parser.add_argument("--require-performance", action="store_true")
+    parser.add_argument("--require-backend", choices=("fake", "cuda"))
+    parser.add_argument("--min-inference-samples", type=int, default=0)
     args = parser.parse_args()
     summary = json.loads(Path(args.summary).read_text())
     messages = [json.loads(line) for line in Path(args.ndjson).read_text().splitlines()]
@@ -20,6 +22,7 @@ def main():
     if not messages or messages[0].get("type") != "hello": failures.append("missing hello")
     if messages and messages[0].get("protocol") != "duet-edge-stream/v2": failures.append("unexpected protocol")
     if not messages or messages[-1].get("type") != "eos": failures.append("missing eos")
+    if messages and messages[-1].get("type") == "eos" and messages[-1].get("reason") != "input_complete": failures.append("unexpected eos reason")
     if states != ["starting", "buffering", "playing", "draining", "finished"]: failures.append("unexpected lifecycle")
     if [m["seq"] for m in frames] != list(range(len(frames))): failures.append("non-contiguous frame seq")
     if any(m.get("frame_id") != m.get("seq") for m in frames): failures.append("frame_id/seq mismatch")
@@ -31,6 +34,23 @@ def main():
     if summary["queues"]["overloads"] != 0: failures.append("inference overload")
     if summary["input"]["sequence_errors"] != 0: failures.append("input sequence error")
     if summary.get("lifecycle", {}).get("final_state") != "finished": failures.append("summary lifecycle is not finished")
+    if summary.get("exit_reason") != "input_complete": failures.append("summary exit reason is not input_complete")
+    backend = summary.get("backend", {})
+    if args.require_backend and backend.get("backend") != args.require_backend:
+        failures.append(f"backend is not required {args.require_backend}")
+    sample_count = summary.get("inference", {}).get("sample_count", 0)
+    if sample_count < args.min_inference_samples:
+        failures.append(
+            f"inference sample count {sample_count} is below {args.min_inference_samples}"
+        )
+    if backend.get("backend") == "cuda":
+        configured_steps = summary["config"]["model"]["sampling_steps"]
+        if backend.get("sampling_steps") != configured_steps:
+            failures.append("backend/config sampling steps mismatch")
+        if not backend.get("engine_commit") or backend.get("engine_commit") == "unknown":
+            failures.append("missing engine commit")
+        if not backend.get("checkpoint_sha256"):
+            failures.append("missing checkpoint SHA256")
     stream_config = summary["config"]["stream"]
     if args.duration_min > 0 and frames and frames[-1]["motion_time_s"] + 1 / stream_config["fps"] < args.duration_min * 60:
         failures.append(f"stream shorter than requested {args.duration_min} minutes")
@@ -50,6 +70,10 @@ def main():
         jitter = summary["output"]["jitter_p95_ms"]
         if jitter is None or jitter > jitter_slo_ms: failures.append("jitter p95 exceeds configured SLO")
         if not all(summary.get("slo", {}).values()): failures.append("summary SLO result is not fully met")
+        if backend.get("backend") == "cuda":
+            for field in ("cuda_p50_ms", "cuda_p95_ms", "cuda_p99_ms"):
+                if summary["inference"].get(field) is None:
+                    failures.append(f"missing {field}")
     result = {"passed": not failures, "failures": failures, "frames": len(frames)}
     print(json.dumps(result, indent=2))
     raise SystemExit(0 if not failures else 1)

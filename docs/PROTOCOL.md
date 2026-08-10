@@ -98,7 +98,7 @@ eos
 | `type` | 核心字段 | 用途 |
 |---|---|---|
 | `state` | `state`, `wall_time_s`, `monotonic_offset_s` | 生命周期转换 |
-| `metrics` | p95、队列、丢帧、underflow、deadline miss | 实时运行状态 |
+| `metrics` | p95、队列、总计/每客户端丢帧、underflow、deadline miss | 实时运行状态 |
 | `backpressure` | `window_id`, `policy`, `wait_ms` | 输入等待推理容量 |
 | `overload` | `window_id`, `policy`, `reason` | fail 策略触发 |
 | `degraded` | `window_id`, `observed_ms`, `slo_ms` | 推理 SLO miss |

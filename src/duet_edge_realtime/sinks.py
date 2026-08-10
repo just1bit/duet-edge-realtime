@@ -98,6 +98,8 @@ class WebSocketSink(Sink):
         self.hello: dict | None = None
         self.latest_status: dict[str, dict] = {}
         self.clients: dict[Any, tuple[ViewerMailbox, asyncio.Task]] = {}
+        self.client_ids: dict[Any, str] = {}
+        self._next_client_id = 1
 
     async def start(self, hello: dict) -> None:
         self.hello = hello
@@ -107,6 +109,8 @@ class WebSocketSink(Sink):
         queue = ViewerMailbox(self.queue_frames)
         sender = asyncio.create_task(self._sender(websocket, queue))
         self.clients[websocket] = (queue, sender)
+        self.client_ids[websocket] = f"viewer-{self._next_client_id}"
+        self._next_client_id += 1
         try:
             await websocket.send(json.dumps(self.hello, separators=(",", ":")))
             for status in self.latest_status.values():
@@ -114,6 +118,7 @@ class WebSocketSink(Sink):
             await websocket.wait_closed()
         finally:
             self.clients.pop(websocket, None)
+            self.client_ids.pop(websocket, None)
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
 
@@ -128,11 +133,11 @@ class WebSocketSink(Sink):
             "state", "metrics", "degraded", "backpressure", "overload", "eos", "error"
         }:
             self.latest_status[message_type] = message
-        for queue, _ in list(self.clients.values()):
+        for client, (queue, _) in list(self.clients.items()):
             if isinstance(queue, ViewerMailbox):
                 dropped = queue.put_nowait(message)
                 if dropped and self.on_drop:
-                    self.on_drop()
+                    self.on_drop(self.client_ids.get(client, "viewer-unknown"))
                 continue
             if queue.full() and message_type == "frame":
                 try:
@@ -140,7 +145,7 @@ class WebSocketSink(Sink):
                 except asyncio.QueueEmpty:
                     pass
                 if self.on_drop:
-                    self.on_drop()
+                    self.on_drop(self.client_ids.get(client, "viewer-unknown"))
             queue.put_nowait(message)
 
     async def close(self) -> None:

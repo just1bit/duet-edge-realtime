@@ -209,20 +209,34 @@ class StreamingService:
         buffer = SlidingWindowBuffer(seed=self.config.model.seed)
         source_start = self.clock.now()
         for frame in self.source.frames():
-            await self.clock.sleep_until(source_start + frame.seq / self.config.fps)
-            frame = replace(frame, ingest_monotonic_s=self.clock.now())
+            source_deadline = source_start + frame.seq / self.config.fps
+            if isinstance(self.clock, VirtualClock):
+                # Input event time and playout time are separate logical lanes.
+                # Advancing their shared virtual clock here lets playout move
+                # future input windows and corrupts observed source timing.
+                await asyncio.sleep(0)
+                ingest_time = source_deadline
+            else:
+                await self.clock.sleep_until(source_deadline)
+                ingest_time = self.clock.now()
+            frame = replace(frame, ingest_monotonic_s=ingest_time)
             if self.metrics.input_first_clock_s is None:
-                self.metrics.input_first_clock_s = self.clock.now()
-            self.metrics.input_last_clock_s = self.clock.now()
+                self.metrics.input_first_clock_s = ingest_time
+            self.metrics.input_last_clock_s = ingest_time
             self.metrics.input_frames += 1
             try:
-                window = buffer.push(frame, self.clock.now())
+                window = buffer.push(frame, ingest_time)
             except SequenceError:
                 self.metrics.sequence_errors += 1
                 raise
             if window is not None:
                 await self._enqueue_inference(window)
-        tail = buffer.flush(self.clock.now())
+        tail_time = (
+            self.metrics.input_last_clock_s
+            if self.metrics.input_last_clock_s is not None
+            else self.clock.now()
+        )
+        tail = buffer.flush(tail_time)
         if tail is not None:
             await self._enqueue_inference(tail)
         await self._inference_queue.put(STOP)
@@ -395,6 +409,45 @@ class StreamingService:
             await self.sink.send(self.metrics.live_message())
 
 
+async def _record_startup_failure(
+    service, backend, config, output_dir, backend_name, exc, exit_reason
+) -> None:
+    """Publish and persist failures that happen before ``service.run()``."""
+    service.metrics.exit_reason = exit_reason
+    service.metrics.errors.append(str(exc))
+    try:
+        await service.sink.start(service.hello())
+        await service._publish_initial_state()
+        await service._transition(ServiceState.FAILED)
+        await service.sink.send({
+            "type": "error",
+            "schema_version": SCHEMA_VERSION,
+            "run_id": service.run_id,
+            "session_id": service.session_id,
+            "stream_id": service.stream_id,
+            "error": str(exc),
+        })
+    except Exception as publication_exc:
+        service.metrics.errors.append(f"failure publication: {publication_exc}")
+    finally:
+        try:
+            backend_info = backend.version_info()
+        except Exception as version_exc:
+            service.metrics.errors.append(f"backend metadata: {version_exc}")
+            backend_info = {"backend": backend_name}
+        service.metrics.write(
+            output_dir / "summary.json",
+            {**realtime_repository_info(), **backend_info},
+            config.as_dict(),
+        )
+        try:
+            await service.sink.close()
+        except Exception as close_exc:
+            service.metrics.errors.append(f"failure sink close: {close_exc}")
+        service._inference_executor.shutdown(wait=True, cancel_futures=True)
+        backend.close()
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Duet-EDGE V1 streaming service")
     parser.add_argument("--config", default="configs/v1.fake.json")
@@ -491,41 +544,6 @@ async def _async_main(args: argparse.Namespace) -> None:
             sampling_steps=config.sampling_steps,
             eta=config.eta,
         )
-    warmup_started = time.perf_counter()
-    try:
-        await asyncio.to_thread(backend.warmup)
-    except Exception as exc:
-        failed = RunMetrics(str(uuid.uuid4()))
-        failed.exit_reason = "model_load_or_warmup_error"
-        failed.errors.append(str(exc))
-        try:
-            backend_info = backend.version_info()
-        except Exception:
-            backend_info = {"backend": backend_name}
-        failed.write(
-            output_dir / "summary.json",
-            {**realtime_repository_info(), **backend_info},
-            config.as_dict(),
-        )
-        backend.close()
-        raise
-    warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
-
-    input_format = args.input_format or ("fixture" if backend_name == "fake" else "aist")
-    if input_format == "fixture":
-        source = NormalizedFixtureAdapter(input_path, config.fps, loop=args.loop)
-    else:
-        if backend_name != "cuda":
-            raise SystemExit("AIST preprocessing requires the CUDA Duet-EDGE backend")
-        if root_scaled is None:
-            raise SystemExit("AIST input requires explicit --root-scaled true|false")
-        source = AISTFileReplayAdapter(
-            input_path,
-            backend.edge.normalizer,
-            engine_root,
-            root_scaled=root_scaled,
-            fps=config.fps,
-        )
 
     sink_names = {name.strip() for name in args.sink.split(",") if name.strip()}
     unknown = sink_names - {"ndjson", "websocket"}
@@ -536,19 +554,60 @@ async def _async_main(args: argparse.Namespace) -> None:
         sinks.append(NDJSONSink(output_dir / "stream.ndjson"))
     metrics_ref = None
     if "websocket" in sink_names:
-        def on_drop():
+        def on_drop(client_id):
             if metrics_ref is not None:
-                metrics_ref.dropped_view_frames += 1
-        sinks.append(WebSocketSink(config.bind_host, config.port, config.viewer_queue_frames, on_drop))
+                metrics_ref.record_view_drop(client_id)
+        sinks.append(
+            WebSocketSink(
+                config.bind_host, config.port, config.viewer_queue_frames, on_drop
+            )
+        )
     if not sinks:
         raise SystemExit("at least one sink is required")
     clock = VirtualClock() if args.clock == "virtual" else RealtimeClock()
     service = StreamingService(
-        config, backend, source, CompositeSink(sinks), clock,
+        config, backend, None, CompositeSink(sinks), clock,
         output_dir / "summary.json", run_id=run_id,
     )
-    service.metrics.model_load_warmup_ms = warmup_ms
     metrics_ref = service.metrics
+
+    warmup_started = time.perf_counter()
+    try:
+        await asyncio.to_thread(backend.warmup)
+    except Exception as exc:
+        await _record_startup_failure(
+            service, backend, config, output_dir, backend_name, exc,
+            "model_load_or_warmup_error",
+        )
+        raise
+    warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
+
+    try:
+        input_format = args.input_format or (
+            "fixture" if backend_name == "fake" else "aist"
+        )
+        if input_format == "fixture":
+            source = NormalizedFixtureAdapter(input_path, config.fps, loop=args.loop)
+        else:
+            if backend_name != "cuda":
+                raise ValueError("AIST preprocessing requires the CUDA Duet-EDGE backend")
+            if root_scaled is None:
+                raise ValueError("AIST input requires explicit --root-scaled true|false")
+            source = AISTFileReplayAdapter(
+                input_path,
+                backend.edge.normalizer,
+                engine_root,
+                root_scaled=root_scaled,
+                fps=config.fps,
+            )
+    except Exception as exc:
+        await _record_startup_failure(
+            service, backend, config, output_dir, backend_name, exc,
+            "input_setup_error",
+        )
+        raise
+    service.source = source
+    service.metrics.model_load_warmup_ms = warmup_ms
     LOG.info(
         "run_id=%s backend=%s input=%s output=%s",
         service.run_id, backend_name, input_path, output_dir,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ast
 import hashlib
+import inspect
 import subprocess
 import sys
 import time
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +65,7 @@ class CudaDuetEdgeBackend(InferenceBackend):
             guidance_weight_lead=self.guidance_lead,
         )
         self.edge.eval()
+        self._validate_sampling_api()
         device = self.edge.accelerator.device
         self._zero_music = torch.zeros((1, 150, 4800), device=device)
         zeros = np.zeros((150, 151), dtype=np.float32)
@@ -73,6 +77,45 @@ class CudaDuetEdgeBackend(InferenceBackend):
                     warmup_index, 0, 150, 0.0, warmup_index, zeros
                 )
             )
+
+    def _validate_sampling_api(self) -> None:
+        """Reject configurable DDIM settings when the engine silently ignores them.
+
+        The original Duet-EDGE ``ddim_sample`` accepts ``**kwargs`` while still
+        hard-coding 50 steps and eta=1.  Merely calling it with keyword options
+        therefore doesn't prove that those options are honored.
+        """
+        if self.sampling_steps == 50 and self.eta == 1.0:
+            return
+        function = self.edge.diffusion.ddim_sample
+        parameters = inspect.signature(function).parameters
+        if {"sampling_timesteps", "eta"} <= set(parameters):
+            return
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        except (OSError, TypeError, SyntaxError):
+            tree = None
+        popped_options = set()
+        if tree is not None:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                target = node.func
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "pop"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "kwargs"
+                    and isinstance(node.args[0], ast.Constant)
+                ):
+                    popped_options.add(node.args[0].value)
+        if {"sampling_timesteps", "eta"} <= popped_options:
+            return
+        raise RuntimeError(
+            "the selected Duet-EDGE runtime does not honor configurable DDIM "
+            "sampling_timesteps/eta; use the baseline 50-step eta=1 settings "
+            "or a compatible optimized engine commit"
+        )
 
     def _validate_runtime_layout(self) -> None:
         required = ("EDGE.py", "model/diffusion.py", "vis.py")
@@ -168,5 +211,9 @@ class CudaDuetEdgeBackend(InferenceBackend):
             "checkpoint": str(self.checkpoint),
             "checkpoint_bytes": self.checkpoint.stat().st_size,
             "checkpoint_sha256": digest.hexdigest(),
+            "guidance_music": self.guidance_music,
+            "guidance_lead": self.guidance_lead,
+            "sampling_steps": self.sampling_steps,
+            "eta": self.eta,
             **torch_info,
         }

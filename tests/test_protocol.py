@@ -50,6 +50,11 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(summary["queues"]["overloads"], 0)
             self.assertEqual(summary["output"]["committed_frames"], 300)
             self.assertEqual(summary["lifecycle"]["final_state"], "finished")
+            self.assertAlmostEqual(summary["input"]["observed_fps"], 30.0)
+            self.assertEqual(
+                [round(window["trigger_time_s"], 6) for window in summary["windows"]["recent"]],
+                [4.966667, 7.466667, 9.966667],
+            )
 
     def test_partial_tail_preserves_exact_length(self):
         for count in (151, 224):
