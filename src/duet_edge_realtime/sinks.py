@@ -130,7 +130,7 @@ class WebSocketSink(Sink):
     async def send(self, message: dict) -> None:
         message_type = message.get("type")
         if message_type in {
-            "state", "metrics", "degraded", "backpressure", "overload", "eos", "error"
+            "state", "metrics", "eos", "error"
         }:
             self.latest_status[message_type] = message
         for client, (queue, _) in list(self.clients.items()):

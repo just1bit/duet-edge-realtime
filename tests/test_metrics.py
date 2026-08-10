@@ -34,7 +34,9 @@ class MetricsTests(unittest.TestCase):
         summary = metrics.summary(
             {"backend": "cuda"},
             {"stream": {
-                "hop_frames": 75, "fps": 30, "inference_slo_ms": 1900,
+                "window_frames": 150, "hop_frames": 75, "fps": 30,
+                "inference_slo_ms": 1900,
+                "safety_margin_ms": 100, "playout_delay_s": 2.0,
                 "inference_queue_policy": "block", "jitter_slo_ms": 20,
             }},
         )

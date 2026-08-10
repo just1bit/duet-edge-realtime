@@ -14,7 +14,7 @@
 | P2：检查 Viewer | fake fixture | 启动服务和网页 | 浏览器骨架动画 | 动画、状态、重连和文件回放正常 |
 | S2：测量性能 | `real_fixture.npz` | 测量 50-step 推理 p99 | `benchmark.json` | `deadline_candidate: true` |
 | P3：写入正式配置 | benchmark 结果 | 更新 steps、播放缓冲和推理 SLO | `configs/v1.cuda.json` | 配置值来自实测结果 |
-| S3：最终验收 | 正式配置、real fixture | 按真实时钟运行 10 分钟 | final NDJSON、summary | FPS、延迟、序列和稳定性全部通过 |
+| S3：最终验收 | 正式配置、real fixture | 按真实时钟运行 10 分钟 | final NDJSON、summary、资源趋势 | 自动指标和人工检查全部通过 |
 
 阶段按表格顺序执行。每一阶段完成后再进入下一阶段。
 
@@ -101,7 +101,7 @@ python scripts/prepare_aist_motion.py \
 ${RUN_ROOT}/input_motion.pkl
 ```
 
-终端会显示原始帧数和 `root_scaled=false`。文件存在即表示 P0 完成：
+转换脚本会校验根位置、关节旋转、scale、NaN/Inf 和最小输入长度。终端会显示原始 60 FPS 帧数、预计的 30 FPS 帧数和 `root_scaled=false`。文件存在即表示 P0 完成：
 
 ```bash
 test -f "${RUN_ROOT}/input_motion.pkl"
@@ -214,7 +214,8 @@ python -m duet_edge_realtime.service \
 python scripts/check_run.py \
   --summary "${RUN_ROOT}/s1-real-smoke/summary.json" \
   --ndjson "${RUN_ROOT}/s1-real-smoke/stream.ndjson" \
-  --require-backend cuda
+  --require-backend cuda \
+  --min-inference-samples 2
 ```
 
 ### 操作 3：运行 CUDA 单窗口确定性测试
@@ -309,9 +310,11 @@ ws://127.0.0.1:8765
 3. 断开后重新连接，页面恢复骨架定义和当前状态，并继续接收新画面；
 4. 选择 `${RUN_ROOT}/p2-viewer/stream.ndjson`，文件可以回放。
 5. 再选择 `${RUN_ROOT}/s1-real-smoke/stream.ndjson`，确认真实伴舞没有明显骨架翻转、
-   地面轴错误、持续漂移或窗口边界跳变；记录观察结论和使用的模型 commit。
+   地面轴错误、持续漂移或窗口边界跳变；记录观察结论、checkpoint SHA256 和有效配置。
 
-检查完成后等待终端 A 正常结束，并在终端 B 按 `Ctrl+C` 关闭网页服务。
+把五项结果、checkpoint SHA256 和有效配置路径写入
+`${RUN_ROOT}/acceptance-observations.md`。检查完成后等待终端 A 正常结束，并在终端 B
+按 `Ctrl+C` 关闭网页服务。
 
 ### 输出与预期结果
 
@@ -378,26 +381,35 @@ ${RUN_ROOT}/benchmark.json
 }
 ```
 
-- `deadline_candidate: true` 表示推理 p99 加 100 ms 后仍小于 2.5 秒，可以持续跟上输入；
+- `deadline_candidate: true` 表示推理 p99 加配置中的 `safety_margin_ms` 后仍小于 2.5 秒，可以持续跟上输入；
 - `recommended_playout_delay_s` 是正式配置建议使用的播放缓冲。
 
-50-step 达标后直接进入 P3。若 `deadline_candidate` 为 `false`，先切换到明确支持
-`sampling_timesteps`/`eta` 且带 lead-only CFG 快路径的已审核 Duet-EDGE commit，记录
-该 commit，再用新的 run ID 重复本阶段。实时后端会拒绝在不支持参数化 DDIM 的引擎上
-运行非 50-step，不能绕过这个检查。
-
-切换优化引擎后先验证 lead-only CFG 快路径数值等价：
+50-step 达标后直接进入 P3。需要评估更低延迟时，在同一 Duet-EDGE 代码、checkpoint、
+输入、seed 和 guidance 配置下运行低-step 候选：
 
 ```bash
-python scripts/check_cfg_equivalence.py \
-  --checkpoint "${EDGE_CHECKPOINT}" \
-  --duet-edge-root "${DUET_EDGE_ROOT}" \
-  --output "${RUN_ROOT}/cfg-equivalence.json"
+for STEPS in 25 20 10; do
+  python -m duet_edge_realtime.service \
+    --config configs/v1.cuda.json \
+    --duet-edge-root "${DUET_EDGE_ROOT}" \
+    --checkpoint "${EDGE_CHECKPOINT}" \
+    --input "${RUN_ROOT}/real_fixture.npz" \
+    --input-format fixture \
+    --output-dir "${RUN_ROOT}" \
+    --loop 51 \
+    --sampling-steps "${STEPS}" \
+    --clock virtual \
+    --sink ndjson \
+    --run-id "s2-benchmark-${STEPS}"
+done
+
+python scripts/summarize_benchmark.py "${RUN_ROOT}" \
+  --pattern "s2-benchmark-*/summary.json" \
+  --min-samples 100 \
+  --output benchmark.json
 ```
 
-必须得到 `passed: true`、`fast_path_forward_calls: 2`，否则不能测试低 steps 候选。
-
-对 25/20/10 等低 steps 候选，必须同时运行 50-step 基线并执行质量回归：
+随后以 50-step 为基线，对每个低-step 候选执行质量回归：
 
 ```bash
 python scripts/compare_quality.py \
@@ -408,9 +420,8 @@ python scripts/compare_quality.py \
   --output "${RUN_ROOT}/quality-25.json"
 ```
 
-每个低 steps 候选分别执行一次。只有 `deadline_candidate: true` 且质量 JSON
-`passed: true` 的候选可以进入 P3；在合格候选中选择 steps 最大者。质量 JSON 与
-benchmark 一起归档。
+每个低-step 候选分别执行一次。在 `deadline_candidate: true` 且质量 JSON
+`passed: true` 的候选中选择 steps 最大者。质量 JSON 与 benchmark 一起归档。
 
 ---
 
@@ -419,35 +430,47 @@ benchmark 一起归档。
 ### 输入
 
 - S2 通过的 `steps`；
-- `benchmark.json` 中对应的 `recommended_playout_delay_s`。
+- `${RUN_ROOT}/benchmark.json`；
+- 低-step 候选对应的 `${RUN_ROOT}/quality-<steps>.json`；
+- `configs/v1.cuda.json` 中统一配置的 `stream.safety_margin_ms`。
 
-先把最终选择写入环境变量，值必须来自 benchmark 和质量选择结果：
+先设置最终选择的 steps：
 
 ```bash
 export SAMPLING_STEPS=50
-export PLAYOUT_DELAY_S=2.0
 ```
 
-上面的数值只是格式示例，不能直接照抄。
+上面的数值是格式示例，实际值使用 S2 选中的候选。
 
 ### 操作
 
 ```bash
 python scripts/update_runtime_config.py \
   --config configs/v1.cuda.json \
-  --sampling-steps "${SAMPLING_STEPS}" \
-  --playout-delay-s "${PLAYOUT_DELAY_S}" \
-  --safety-margin-ms 100
+  --benchmark "${RUN_ROOT}/benchmark.json" \
+  --sampling-steps "${SAMPLING_STEPS}"
 python -m json.tool configs/v1.cuda.json
 ```
 
-脚本会同时更新：
+低于 50 steps 时同时提供对应质量结果，例如：
+
+```bash
+python scripts/update_runtime_config.py \
+  --config configs/v1.cuda.json \
+  --benchmark "${RUN_ROOT}/benchmark.json" \
+  --sampling-steps 25 \
+  --quality "${RUN_ROOT}/quality-25.json"
+```
+
+脚本会校验候选的 `deadline_candidate`、安全余量和推荐播放延迟；低-step 候选同时校验
+质量结果。校验通过后更新：
 
 - `model.sampling_steps`；
 - `stream.playout_delay_s`；
 - `stream.inference_slo_ms`。
 
-`inference_slo_ms` 等于播放缓冲和 2.5 秒 hop 周期中的较小值，再减去 100 ms 安全余量。
+`inference_slo_ms` 等于播放缓冲和 2.5 秒 hop 周期中的较小值，再减去
+`stream.safety_margin_ms`。基准汇总、配置更新、运行摘要和最终检查共同读取这一配置项。
 
 ### 输出与预期结果
 
@@ -457,7 +480,8 @@ python -m json.tool configs/v1.cuda.json
 configs/v1.cuda.json
 ```
 
-终端会打印最终 steps、播放缓冲、推理 SLO 和安全余量。确认这些值与 S2 选择一致，P3 即完成。
+终端会打印 benchmark、quality（如适用）、最终 steps、播放缓冲、推理 SLO 和安全余量。
+确认这些值与 S2 选择一致，P3 即完成。
 
 ---
 
@@ -488,7 +512,21 @@ python -m duet_edge_realtime.service \
 
 这条命令会实际运行约 10 分钟。运行期间可以打开 P2 的网页，实时观察骨架。
 
-### 操作 2：自动检查最终结果
+### 操作 2：记录 GPU 资源趋势
+
+服务运行期间，在终端 C 每 5 秒记录一次 GPU 利用率、显存、功耗和温度：
+
+```bash
+nvidia-smi \
+  --query-gpu=timestamp,index,utilization.gpu,memory.used,power.draw,temperature.gpu \
+  --format=csv \
+  -l 5 > "${RUN_ROOT}/s3-gpu-resources.csv"
+```
+
+终端 A 的服务结束后，在终端 C 按 `Ctrl+C` 停止采样。检查 CSV 覆盖完整运行时段，
+并把显存趋势和 Viewer 观察结论写入 `${RUN_ROOT}/acceptance-observations.md`。
+
+### 操作 3：自动检查最终结果
 
 ```bash
 python scripts/check_run.py \
@@ -521,17 +559,23 @@ ${RUN_ROOT}/s3-final-10min/
 }
 ```
 
-这个结果代表：
+这个自动检查结果代表：
 
 - 动作时间达到 10 分钟；
 - 18000 帧连续提交且每帧只有一次；
 - 推理 p99 满足正式 SLO；
 - 推理速度可以覆盖 2.5 秒 hop；
-- 播放缓冲覆盖 p99 和 100 ms 余量；
+- 播放缓冲覆盖 p99 和配置的安全余量；
 - 输出帧率在 29.7–30.3 FPS；
 - jitter p95 满足配置；
 - underflow、overload 和输入序列错误均为 0；
 - 生命周期以 `finished` 结束，NDJSON 最后一条为 EOS。
+
+最终验收还包括：
+
+- P2 的真实动作方向、漂移、自然度和窗口边界观察记录；
+- `s3-gpu-resources.csv` 覆盖完整运行时段，显存趋势稳定；
+- `acceptance-observations.md` 记录 Viewer 丢帧、资源趋势和人工检查结论。
 
 ---
 
@@ -544,7 +588,8 @@ input_motion.pkl
 real_fixture.npz
 benchmark.json
 quality-*.json（仅使用低 steps 候选时）
-cfg-equivalence.json（仅使用优化引擎时）
+acceptance-observations.md
+s3-gpu-resources.csv
 p1-fake/
 s1-real-smoke/
 p2-viewer/

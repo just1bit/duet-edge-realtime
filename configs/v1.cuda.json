@@ -24,6 +24,7 @@
     "viewer_queue_frames": 150,
     "inference_queue_policy": "block",
     "inference_slo_ms": 1900.0,
+    "safety_margin_ms": 100.0,
     "deadline_miss_policy": "continue",
     "jitter_slo_ms": 20.0
   },

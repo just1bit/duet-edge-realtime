@@ -59,6 +59,8 @@ class StreamingService:
         self.stream_id = f"{self.run_id}:companion-motion"
         self.metrics = RunMetrics(self.run_id)
         self.lifecycle = Lifecycle()
+        self._input_complete = asyncio.Event()
+        self._source_time_by_seq: dict[int, float] = {}
         self._start_clock = clock.now()
         self._inference_queue: asyncio.Queue = asyncio.Queue(
             maxsize=config.inference_queue_size
@@ -103,6 +105,7 @@ class StreamingService:
                 "playout_delay_s": self.config.playout_delay_s,
                 "hop_period_s": self.config.hop_frames / self.config.fps,
                 "inference_slo_ms": self.config.inference_slo_ms,
+                "safety_margin_ms": self.config.safety_margin_ms,
                 "jitter_slo_ms": self.config.jitter_slo_ms,
             },
             "delivery": {
@@ -229,6 +232,7 @@ class StreamingService:
             except SequenceError:
                 self.metrics.sequence_errors += 1
                 raise
+            self._source_time_by_seq[frame.seq] = frame.source_time_s
             if window is not None:
                 await self._enqueue_inference(window)
         tail_time = (
@@ -239,6 +243,9 @@ class StreamingService:
         tail = buffer.flush(tail_time)
         if tail is not None:
             await self._enqueue_inference(tail)
+        self._input_complete.set()
+        if self.lifecycle.state == ServiceState.PLAYING:
+            await self._transition(ServiceState.DRAINING)
         await self._inference_queue.put(STOP)
 
     async def _enqueue_inference(self, window) -> None:
@@ -346,7 +353,8 @@ class StreamingService:
         while True:
             item = await self._output_queue.get()
             if item is STOP:
-                await self._transition(ServiceState.DRAINING)
+                if self.lifecycle.state != ServiceState.DRAINING:
+                    raise RuntimeError("playout drained before input completion was published")
                 return
             batch = item
             if output_seq != batch.start_frame_id:
@@ -360,6 +368,8 @@ class StreamingService:
                     batch.trigger_monotonic_s + self.config.playout_delay_s
                 )
                 await self._transition(ServiceState.PLAYING)
+                if self._input_complete.is_set():
+                    await self._transition(ServiceState.DRAINING)
             batch_deadline = next_batch_deadline
             for index, pose in enumerate(batch.joints):
                 deadline = batch_deadline + index / self.config.fps
@@ -375,7 +385,12 @@ class StreamingService:
                     self.metrics.output_first_clock_s = now
                 self.metrics.output_last_clock_s = now
                 self.metrics.jitter_ms.append(abs(now - deadline) * 1000.0)
-                source_time_s = output_seq / self.config.fps
+                try:
+                    source_time_s = self._source_time_by_seq.pop(output_seq)
+                except KeyError as exc:
+                    raise RuntimeError(
+                        f"missing source time for output frame {output_seq}"
+                    ) from exc
                 end_to_end_ms = (
                     (now - self._start_clock) - source_time_s
                 ) * 1000.0

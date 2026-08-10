@@ -29,6 +29,7 @@ def main():
             raise SystemExit(f"backend/config sampling steps mismatch: {path}")
         stream = data["config"]["stream"]
         hop_ms = stream["hop_frames"] / stream["fps"] * 1000
+        safety_margin_ms = stream["safety_margin_ms"]
         rows.append({
             "steps": configured_steps,
             "p50_ms": data["inference"]["p50_ms"],
@@ -39,23 +40,23 @@ def main():
             "cuda_p95_ms": data["inference"].get("cuda_p95_ms"),
             "cuda_p99_ms": data["inference"].get("cuda_p99_ms"),
             "sample_count": data["inference"]["sample_count"],
-            "engine_commit": backend.get("engine_commit"),
             "checkpoint_sha256": backend.get("checkpoint_sha256"),
-            "deadline_candidate": data["inference"]["p99_ms"] + 100 < hop_ms,
+            "deadline_candidate": data["inference"]["p99_ms"] + safety_margin_ms < hop_ms,
+            "safety_margin_ms": safety_margin_ms,
             "hop_period_ms": hop_ms,
             "summary": str(path),
         })
     passing = [row for row in rows if row["deadline_candidate"]]
-    # Leave one full 100 ms safety margin above the measured p99, rounded up to
+    # Leave the configured safety margin above the measured p99, rounded up to
     # a value that is easy to place in the runtime config.
     for row in rows:
-        delay = math.ceil((row["p99_ms"] / 1000.0 + 0.1) * 1000.0) / 1000.0
+        delay = math.ceil((row["p99_ms"] + row["safety_margin_ms"])) / 1000.0
         row["recommended_playout_delay_s"] = (
             delay if delay * 1000 < row["hop_period_ms"] else None
         )
     result = {
         "decision": "baseline_pass" if passing else "optimization_required",
-        "rule": "p99_ms + 100 < hop_period_ms",
+        "rule": "p99_ms + safety_margin_ms < hop_period_ms",
         "recommended_baseline": max(passing, key=lambda row: row["steps"]) if passing else None,
         "candidates": rows,
     }

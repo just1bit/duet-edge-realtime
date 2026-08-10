@@ -44,6 +44,19 @@ class BackpressureTests(unittest.TestCase):
         self.assertEqual(messages[0]["type"], "state")
         self.assertEqual([m["seq"] for m in messages[1:]], [1,2])
 
+    def test_reconnect_snapshot_excludes_historical_diagnostics(self):
+        sink = WebSocketSink("127.0.0.1", 8765, 2)
+
+        async def scenario():
+            await sink.send({"type": "state", "state": "playing"})
+            await sink.send({"type": "metrics", "inference_p95_ms": 10.0})
+            await sink.send({"type": "degraded", "window_id": 1})
+            await sink.send({"type": "backpressure", "window_id": 2})
+            await sink.send({"type": "overload", "window_id": 3})
+
+        asyncio.run(scenario())
+        self.assertEqual(set(sink.latest_status), {"state", "metrics"})
+
     def test_inference_fail_policy_emits_overload(self):
         sink = MemorySink()
         service = StreamingService(

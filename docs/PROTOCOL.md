@@ -25,6 +25,7 @@ state(buffering)
 state(playing)
 frame / metrics / degraded / backpressure ...
 state(draining)
+frame / metrics ...（已入队窗口和尾段继续播放）
 state(finished)
 eos
 ```
@@ -105,4 +106,4 @@ eos
 | `eos` | `frames`, `reason` | 正常结束 |
 | `error` | `error` | 结构化错误 |
 
-Viewer 连接后先接收 hello，随后接收各类型最新控制消息和实时帧。客户端可使用 `frame_id` 检测展示帧跳跃，并使用 NDJSON 获得完整提交序列。
+Viewer 连接后先接收 hello，随后接收当前 state、最新 metrics、终态消息和实时帧。degraded、backpressure 与 overload 作为实时事件发送，完整历史保存在 NDJSON。客户端可使用 `frame_id` 检测展示帧跳跃，并使用 NDJSON 获得完整提交序列。

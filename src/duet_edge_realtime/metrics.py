@@ -126,11 +126,22 @@ class RunMetrics:
         )
         stream_config = config["stream"]
         hop_period_ms = stream_config["hop_frames"] / stream_config["fps"] * 1000.0
+        safety_margin_ms = stream_config["safety_margin_ms"]
         inference_p99_ms = percentile(self.inference_wall_ms, 0.99)
         cuda_p50_ms = percentile(self.inference_cuda_ms, 0.50)
         cuda_p95_ms = percentile(self.inference_cuda_ms, 0.95)
         cuda_p99_ms = percentile(self.inference_cuda_ms, 0.99)
         jitter_p95_ms = percentile(self.jitter_ms, 0.95)
+        first_frame_latency_s = (
+            self.output_first_clock_s - self.input_first_clock_s
+            if self.output_first_clock_s is not None and self.input_first_clock_s is not None
+            else None
+        )
+        fixed_latency_ms = (
+            (stream_config["window_frames"] - 1) / stream_config["fps"]
+            + stream_config["playout_delay_s"]
+        ) * 1000.0
+        end_to_end_p95_ms = percentile(self.end_to_end_latency_ms, 0.95)
         return {
             "run_id": self.run_id,
             "exit_reason": self.exit_reason,
@@ -165,6 +176,7 @@ class RunMetrics:
                 "cuda_p99_ms": cuda_p99_ms,
                 "deadline_misses": self.inference_deadline_misses,
                 "configured_slo_ms": stream_config["inference_slo_ms"],
+                "safety_margin_ms": safety_margin_ms,
                 "hop_period_ms": hop_period_ms,
                 "headroom_ms": (
                     hop_period_ms - inference_p99_ms
@@ -183,15 +195,11 @@ class RunMetrics:
             "output": {
                 "frames": self.output_frames,
                 "observed_fps": ((self.output_frames - 1) / output_span if output_span > 0 else None),
-                "first_frame_latency_s": (
-                    self.output_first_clock_s - self.input_first_clock_s
-                    if self.output_first_clock_s is not None and self.input_first_clock_s is not None
-                    else None
-                ),
+                "first_frame_latency_s": first_frame_latency_s,
                 "jitter_p95_ms": jitter_p95_ms,
                 "jitter_mean_ms": statistics.fmean(self.jitter_ms) if self.jitter_ms else None,
                 "end_to_end_latency_p50_ms": percentile(self.end_to_end_latency_ms, 0.50),
-                "end_to_end_latency_p95_ms": percentile(self.end_to_end_latency_ms, 0.95),
+                "end_to_end_latency_p95_ms": end_to_end_p95_ms,
                 "underflows": self.underflows,
                 "dropped_view_frames": self.dropped_view_frames,
                 "dropped_view_frames_by_client": dict(
@@ -209,6 +217,25 @@ class RunMetrics:
                 "inference_p99_met": (
                     inference_p99_ms is not None
                     and inference_p99_ms <= stream_config["inference_slo_ms"]
+                ),
+                "compute_budget_met": (
+                    inference_p99_ms is not None
+                    and inference_p99_ms + safety_margin_ms < hop_period_ms
+                ),
+                "playout_budget_met": (
+                    inference_p99_ms is not None
+                    and inference_p99_ms + safety_margin_ms
+                    <= stream_config["playout_delay_s"] * 1000.0
+                ),
+                "first_frame_latency_met": (
+                    first_frame_latency_s is not None
+                    and abs(first_frame_latency_s * 1000.0 - fixed_latency_ms)
+                    <= stream_config["jitter_slo_ms"]
+                ),
+                "end_to_end_latency_p95_met": (
+                    end_to_end_p95_ms is not None
+                    and end_to_end_p95_ms
+                    <= fixed_latency_ms + stream_config["jitter_slo_ms"]
                 ),
                 "jitter_p95_met": (
                     jitter_p95_ms is not None

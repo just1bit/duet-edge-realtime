@@ -2,7 +2,7 @@
 
 基于外部 Duet-EDGE 模型仓库的近实时流式伴舞系统：30 FPS 文件回放 → 150/75 滑窗 → lead-only 推理 → 在线连续性处理 → 连续时间线提交 → 播放缓冲 → NDJSON/WebSocket/Canvas Viewer。
 
-V1 使用固定延迟时间线。默认首帧预算为 `149 / 30 + 2.0 ≈ 6.97 秒`，稳态每 2.5 秒触发一个推理窗口。GPU 基准负责确定正式 `sampling_steps`、`inference_slo_ms` 和 `playout_delay_s`。
+V1 使用固定延迟时间线。默认首帧预算为 `149 / 30 + 2.0 ≈ 6.97 秒`，稳态每 2.5 秒触发一个推理窗口。GPU 基准负责确定正式 `sampling_steps`、`inference_slo_ms` 和 `playout_delay_s`，安全余量统一由 `stream.safety_margin_ms` 提供。
 
 ## 仓库关系
 
@@ -12,7 +12,7 @@ workspace/
 └── duet-edge-realtime/    # 流式服务
 ```
 
-真实后端通过 `DUET_EDGE_ROOT=/absolute/path/to/duet-edge` 在运行时加载模型。启动过程检查核心模型文件、checkpoint 结构和 CUDA 环境；运行摘要记录实际模型路径、remote、commit、工作区状态、checkpoint SHA256、PyTorch/CUDA 和 GPU 信息。
+真实后端通过 `DUET_EDGE_ROOT=/absolute/path/to/duet-edge` 在运行时加载模型。启动过程检查核心模型文件、checkpoint 结构和 CUDA 环境；运行摘要记录实际模型路径、checkpoint SHA256、推理参数、PyTorch/CUDA 和 GPU 信息。
 
 ## 本地快速开始
 
@@ -77,7 +77,7 @@ python -m duet_edge_realtime.service \
   --sink ndjson
 ```
 
-原始 `motions/*.pkl` 使用 `--root-scaled false`；已按模型单位缩放的 `motions_sliced/*.pkl` 使用 `--root-scaled true`。默认 Duet-EDGE API使用 50-step、eta=1；带采样参数的优化运行时可使用其他候选值进行性能与质量基准。
+原始 `motions/*.pkl` 使用 `--root-scaled false`；已按模型单位缩放的 `motions_sliced/*.pkl` 使用 `--root-scaled true`。Duet-EDGE 参数化 DDIM 接口支持使用 50-step 基线和低-step 候选进行性能与质量基准。
 
 ## 队列与 deadline
 
@@ -93,8 +93,8 @@ python -m duet_edge_realtime.service \
 正式配置同时满足：
 
 ```text
-inference_p99 + 100ms < hop_period
-playout_delay >= inference_p99 + 100ms
+inference_p99_ms + safety_margin_ms < hop_period_ms
+playout_delay_ms >= inference_p99_ms + safety_margin_ms
 ```
 
 完整单机验收步骤和质量门槛见

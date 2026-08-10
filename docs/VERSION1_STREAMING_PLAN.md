@@ -54,9 +54,9 @@ duet-edge-realtime
   -> EDGE、normalizer、diffusion、SMPLSkeleton
 ```
 
-真实后端启动时校验模型目录、核心模块、checkpoint 结构、CUDA 环境和数值输出。运行摘要记录模型仓库路径、remote、commit、工作区状态、checkpoint SHA256、PyTorch/CUDA 版本和 GPU 信息，用于复现环境和比较结果。
+真实后端启动时校验模型目录、核心模块、checkpoint 结构、CUDA 环境和数值输出。运行摘要记录模型仓库路径、checkpoint SHA256、推理参数、PyTorch/CUDA 版本和 GPU 信息，用于复现环境和比较结果。
 
-流式服务按运行时接口和结构校验加载模型。真实模型 smoke、协议测试、数值测试和质量验收验证模型版本变更。
+流式服务按既定参数化 DDIM 接口和运行时结构加载模型。真实模型 smoke、协议测试、数值测试和质量验收验证完整推理路径。
 
 ### 3.2 后端接口
 
@@ -146,11 +146,11 @@ first_frame_latency
 稳态计算预算为：
 
 ```text
-inference_p99 + safety_margin < hop_frames / fps
-playout_delay_s >= inference_p99 / 1000 + safety_margin
+inference_p99_ms + safety_margin_ms < hop_frames / fps * 1000
+playout_delay_s * 1000 >= inference_p99_ms + safety_margin_ms
 ```
 
-基准流程的初始安全余量为 100 ms，再根据 GPU 抖动、运行负载和验收结果校准。播放模块按绝对 deadline 调度，记录 jitter、underflow 和端到端延迟。
+安全余量由 `stream.safety_margin_ms` 统一配置，初始值为 100 ms，并根据 GPU 抖动、运行负载和验收结果校准。播放模块按绝对 deadline 调度，记录 jitter、underflow 和端到端延迟。推理 wall 延迟覆盖采样、CUDA 同步和生成窗口传回 CPU，表示连续性处理可开始的时刻。
 
 ## 5. 背压、过载与通道策略
 
@@ -245,6 +245,7 @@ joints[24][3]
     "viewer_queue_frames": 150,
     "inference_queue_policy": "block",
     "inference_slo_ms": 1900.0,
+    "safety_margin_ms": 100.0,
     "deadline_miss_policy": "continue",
     "jitter_slo_ms": 20.0
   },
@@ -255,7 +256,7 @@ joints[24][3]
 }
 ```
 
-配置按“命令行 > 环境变量 > JSON”覆盖。每次运行使用独立目录，写入 `effective_config.json`、`stream.ndjson` 和 `summary.json`。数据路径为绝对路径，WebSocket 和 Viewer 连接实验室电脑的本机地址。
+`duet_edge_root`、`checkpoint`、`input_motion` 和 `output_dir` 按“命令行 > 环境变量 > JSON”覆盖；`backend`、`root_scaled`、`sampling_steps` 和 `playout_delay_s` 支持命令行覆盖 JSON，其余运行参数由 JSON 提供。每次运行使用独立目录，写入 `effective_config.json`、`stream.ndjson` 和 `summary.json`。数据路径为绝对路径，WebSocket 和 Viewer 连接实验室电脑的本机地址。
 
 ## 9. 仓库结构
 
@@ -324,8 +325,8 @@ duet-edge-realtime/
 - 模型目录、checkpoint、CUDA、预热和单窗口确定性；
 - 连续窗口与尾段处理；
 - 预热后推理 p50/p95/p99、CUDA 时间和显存峰值；
-- 计算预算：`p99 + safety_margin < hop_period`；
-- 播放预算：`playout_delay >= p99 + safety_margin`；
+- 计算预算：`p99_ms + safety_margin_ms < hop_period_ms`；
+- 播放预算：`playout_delay_ms >= p99_ms + safety_margin_ms`；
 - 目标 30 FPS、jitter p95、underflow 和队列水位；
 - 在线后处理与离线生成的边界连续性、自然度和坐标方向；
 - 长时间运行的序列完整性和资源趋势。

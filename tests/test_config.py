@@ -13,19 +13,25 @@ class ConfigTests(unittest.TestCase):
             {"window_frames":149}, {"hop_frames":74},
             {"inference_queue_size":0}, {"output_queue_size":0},
             {"inference_queue_policy":"drop"}, {"deadline_miss_policy":"skip"},
+            {"safety_margin_ms":0},
         ):
             with self.assertRaises(ValueError):
                 StreamConfig(**kwargs)
         self.assertEqual(StreamConfig(playout_delay_s=2.5).playout_delay_s, 2.5)
         with self.assertRaises(ValueError):
             ModelConfig(sampling_steps=0)
+        with self.assertRaises(ValueError):
+            StreamConfig(playout_delay_s=1.5)
 
     def test_nested_json_round_trip(self):
         data = {
             "backend":"cuda",
             "paths":{"duet_edge_root":"/engine", "checkpoint":"/model.pt"},
             "model":{"sampling_steps":25, "seed":9},
-            "stream":{"playout_delay_s":1.5, "inference_queue_policy":"fail"},
+            "stream":{
+                "playout_delay_s":1.5, "inference_slo_ms":1400,
+                "safety_margin_ms":100, "inference_queue_policy":"fail"
+            },
             "server":{"port":9876},
         }
         with tempfile.TemporaryDirectory() as temp:
@@ -36,6 +42,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.paths.duet_edge_root, "/engine")
         self.assertEqual(config.sampling_steps, 25)
         self.assertEqual(config.model.seed, 9)
+        self.assertEqual(config.safety_margin_ms, 100)
         self.assertEqual(config.port, 9876)
         self.assertEqual(config.inference_queue_policy, "fail")
         self.assertIn("stream", config.as_dict())

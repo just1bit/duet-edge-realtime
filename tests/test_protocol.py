@@ -10,6 +10,7 @@ from duet_edge_realtime.backends.fake import FakeInferenceBackend
 from duet_edge_realtime.config import RealtimeConfig, StreamConfig
 from duet_edge_realtime.input_adapters import NormalizedFixtureAdapter
 from duet_edge_realtime.playout import VirtualClock
+from duet_edge_realtime.schemas import MotionFrame
 from duet_edge_realtime.service import StreamingService
 from duet_edge_realtime.sinks import CompositeSink, NDJSONSink
 
@@ -17,6 +18,31 @@ from helpers import identity_motion
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_output_preserves_source_event_times(self):
+        class IrregularSource:
+            def frames(self):
+                motion = identity_motion(150)
+                for seq, vector in enumerate(motion):
+                    yield MotionFrame(seq, seq * 0.04, vector)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            service = StreamingService(
+                RealtimeConfig(), FakeInferenceBackend(), IrregularSource(),
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                VirtualClock(), root / "summary.json",
+            )
+            asyncio.run(service.run())
+            frames = [
+                json.loads(line)
+                for line in (root / "stream.ndjson").read_text().splitlines()
+                if json.loads(line).get("type") == "frame"
+            ]
+            np.testing.assert_allclose(
+                [frame["source_time_s"] for frame in frames],
+                np.arange(150) * 0.04,
+            )
+
     def test_fake_e2e_protocol_and_summary(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -37,6 +63,15 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(len(messages[0]["parents"]), 24)
             states = [message["state"] for message in messages if message["type"] == "state"]
             self.assertEqual(states, ["starting", "buffering", "playing", "draining", "finished"])
+            draining_index = next(
+                index for index, message in enumerate(messages)
+                if message.get("type") == "state" and message.get("state") == "draining"
+            )
+            last_frame_index = max(
+                index for index, message in enumerate(messages)
+                if message.get("type") == "frame"
+            )
+            self.assertLess(draining_index, last_frame_index)
             frames = [message for message in messages if message["type"] == "frame"]
             self.assertEqual(len(frames), 300)
             self.assertEqual([frame["seq"] for frame in frames], list(range(300)))

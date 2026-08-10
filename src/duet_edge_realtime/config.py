@@ -40,6 +40,7 @@ class StreamConfig:
     viewer_queue_frames: int = 150
     inference_queue_policy: str = "block"
     inference_slo_ms: float = 1900.0
+    safety_margin_ms: float = 100.0
     deadline_miss_policy: str = "continue"
     jitter_slo_ms: float = 20.0
 
@@ -60,6 +61,15 @@ class StreamConfig:
             raise ValueError("stream.inference_queue_policy must be block or fail")
         if self.inference_slo_ms <= 0:
             raise ValueError("stream.inference_slo_ms must be positive")
+        if self.safety_margin_ms <= 0:
+            raise ValueError("stream.safety_margin_ms must be positive")
+        hop_period_ms = self.hop_frames / self.fps * 1000.0
+        budget_ms = min(self.playout_delay_s * 1000.0, hop_period_ms)
+        if self.inference_slo_ms + self.safety_margin_ms > budget_ms:
+            raise ValueError(
+                "stream.inference_slo_ms + safety_margin_ms must fit "
+                "playout_delay_s and the hop period"
+            )
         if self.deadline_miss_policy not in {"continue", "fail"}:
             raise ValueError("stream.deadline_miss_policy must be continue or fail")
         if self.jitter_slo_ms <= 0:
@@ -123,6 +133,8 @@ class RealtimeConfig:
     def inference_queue_policy(self): return self.stream.inference_queue_policy
     @property
     def inference_slo_ms(self): return self.stream.inference_slo_ms
+    @property
+    def safety_margin_ms(self): return self.stream.safety_margin_ms
     @property
     def deadline_miss_policy(self): return self.stream.deadline_miss_policy
     @property
