@@ -44,7 +44,9 @@ class CudaDuetEdgeBackend(InferenceBackend):
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA backend requires torch.cuda.is_available()")
         self.torch = torch
-        checkpoint = torch.load(self.checkpoint, map_location="cpu")
+        checkpoint = torch.load(
+            self.checkpoint, map_location="cpu", weights_only=False
+        )
         missing_keys = {"ema_state_dict", "normalizer"} - set(checkpoint)
         del checkpoint
         if missing_keys:
