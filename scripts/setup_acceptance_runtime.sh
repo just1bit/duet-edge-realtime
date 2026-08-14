@@ -26,7 +26,8 @@ printf '\n[3/7] Installing Duet-EDGE runtime dependencies\n'
 python -m pip install -r scripts/acceptance-runtime-requirements.txt
 
 printf '\n[4/7] Building PyTorch3D for the installed PyTorch\n'
-python -m pip install 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
+python -m pip install --no-build-isolation \
+  'git+https://github.com/facebookresearch/pytorch3d.git@stable'
 
 printf '\n[5/7] Installing duet-edge-realtime and test tools\n'
 python -m pip install -e '.[dev]'
