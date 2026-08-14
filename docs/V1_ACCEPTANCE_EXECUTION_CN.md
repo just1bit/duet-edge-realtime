@@ -4,11 +4,79 @@
 
 验收目标是确认：模拟链路正常、真实模型可以连续推理、浏览器可以展示、推理速度满足 2.5 秒步长，最后稳定运行 10 分钟。
 
+## 本次实验室机器基线（2026-08-14 preflight）
+
+本手册下面的路径和机器检查已经按
+`acceptance-preflight-20260814-134121.txt` 更新。后续若仓库、checkpoint、驱动或环境发生
+变化，应重新运行 `scripts/collect_acceptance_preflight.sh`，不能继续引用本节结果。
+
+| 项目 | 本机实测值 | 验收状态 |
+|---|---|---|
+| 主机 / 系统 | `robot-System-Product-Name`，Ubuntu 24.04.4 LTS x86_64 | 已确认 |
+| CPU / 内存 | Ryzen 9 9900X3D，12 核 24 线程；123 GiB RAM，8 GiB swap | 充足 |
+| GPU | NVIDIA GeForce RTX 5090，32607 MiB；compute capability 应为 12.0 | 硬件已确认，仍须由 PyTorch 实算确认 |
+| NVIDIA 驱动 | 595.84；`nvidia-smi` 显示 CUDA 13.2 | 驱动已确认；这不是 PyTorch 自带 CUDA runtime 的版本 |
+| 磁盘 | 根分区约 3.4 TiB 可用 | 充足 |
+| 时间 | Pacific/Auckland；NTP 已同步 | 已确认 |
+| 端口 | 8080、8765、18765 当时均空闲 | 每次运行前仍须复查 |
+| 浏览器 | Firefox `/usr/bin/firefox` | 已确认 |
+| GPU 占用 | 仅桌面图形进程，约 614 MiB；无 compute 进程 | 基线良好；正式验收时保持无其他计算任务 |
+| Python / CUDA 推理环境 | 尚未运行兼容性脚本 | **先完成 C0，成功后再继续** |
+
+### 当前仍待关闭的问题
+
+当前只先处理 C0 兼容性门。C0 脚本会安装固定依赖，并验证 Python、PyTorch、CUDA、RTX
+5090、PyTorch3D、Duet-EDGE 导入和 checkpoint 加载。脚本未显示 `COMPATIBILITY GATE:
+PASSED` 时，不执行 P0 或任何后续验收。
+
+本次验收固定输入如下：
+
+```text
+REALTIME_ROOT=/home/robot/data/ethan/duet-edge-realtime-v1/duet-edge-realtime
+DUET_EDGE_ROOT=/home/robot/data/ethan/duet-edge-realtime-v1/duet-edge
+EDGE_CHECKPOINT=/home/robot/data/ethan/duet-edge-realtime-v1/data+checkpoint/train-1800.pt
+AIST_RAW=/home/robot/data/ethan/duet-edge-realtime-v1/data+checkpoint/aist_plusplus_final/motions/gKR_sBM_cAll_d28_mKR2_ch06.pkl
+```
+
+用于证据核对的版本和哈希：
+
+```text
+duet-edge-realtime commit: 01fe13f72acbde637d975efc6d0e36520f7ec3c6
+duet-edge commit:          0556b1a0d6e2c7546a81c6155eb0fab77e7bb0bb
+checkpoint SHA256:         2c948e74400ba78dbec469880746a78dfbb10ed56597917ba2e406cfeb8f9e15
+AIST_RAW SHA256:            54968522c7a41457a91d5c916e0f504db27c1afd696ca30bd2bc98dc12294e21
+```
+
+preflight 中 `duet-edge` 工作树干净；`duet-edge-realtime` 只有生成的 preflight 报告未跟踪。
+开始验收前再次运行 `git status --short`，并把任何新的代码或配置差异记入验收记录。
+
+## 最短开始方式
+
+三个新增脚本的使用关系：
+
+| 脚本 | 是否手动运行 | 用途 |
+|---|---|---|
+| `setup_acceptance_runtime.sh` | 是，首次运行 C0 | 安装依赖并完成兼容性门 |
+| `verify_acceptance_runtime.py` | 否 | 由上一个脚本自动调用，执行只读兼容性检查 |
+| `start_acceptance_run.sh` | 是，C0 通过后运行 P0 | 创建本次验收目录并准备输入 |
+
+实际开始时只需要按顺序执行：
+
+```bash
+cd /home/robot/data/ethan/duet-edge-realtime-v1/duet-edge-realtime
+bash scripts/setup_acceptance_runtime.sh
+source scripts/start_acceptance_run.sh
+```
+
+第二条必须先显示 `COMPATIBILITY GATE: PASSED`，才能执行第三条。第三条必须使用 `source`。
+后面的 P1–S3 按各章节继续。
+
 ## 阶段计划
 
 | 阶段 | 输入 | 要做的事 | 输出 | 通过标准 |
 |---|---|---|---|---|
-| P0：准备环境 | 两个仓库、checkpoint、AIST++ 动作 | 设置路径，转换一份测试动作 | `input_motion.pkl` | 路径和 CUDA 检查通过 |
+| C0：兼容性门 | 当前 Python 环境、RTX 5090、checkpoint | 脚本安装依赖并自动验证 | 环境证据 | 显示 `COMPATIBILITY GATE: PASSED` |
+| P0：准备验收输入 | 两个仓库、checkpoint、AIST++ 动作 | 设置路径、复采 preflight、转换测试动作 | post-env preflight、`input_motion.pkl` | 路径、哈希和输入转换通过 |
 | P1：测试流式核心 | 仓库自带 fake fixture | 跑自动测试和模拟全链路 | fake NDJSON、summary | 测试通过，检查结果 `passed: true` |
 | S1：接入真实模型 | checkpoint、`input_motion.pkl` | 运行真实 CUDA 推理并导出 fixture | real NDJSON、`real_fixture.npz` | 帧连续、坐标有效、运行正常结束 |
 | P2：检查 Viewer | fake fixture | 启动服务和网页 | 浏览器骨架动画 | 动画、状态、重连和文件回放正常 |
@@ -20,92 +88,66 @@
 
 ---
 
-## P0：准备环境
+## C0：先解决 PyTorch / CUDA 兼容性
 
-### 输入
+`setup_acceptance_runtime.sh` 按 `acceptance-runtime-requirements.txt` 安装依赖，然后自动调用
+只读验证脚本和真实 CUDA smoke test。
 
-- `duet-edge-realtime`：流式服务仓库；
-- `duet-edge`：模型仓库；
-- `train-1800.pt`：模型 checkpoint；
-- 一份 AIST++ `motions/*.pkl` 动作。
+### 操作 1：运行安装和验证脚本
 
-下面假设两个仓库和数据目录是并列的：
+```bash
+cd /home/robot/data/ethan/duet-edge-realtime-v1/duet-edge-realtime
+bash scripts/setup_acceptance_runtime.sh
+```
+
+脚本会检查 Python 3.10、PyTorch 2.7/CUDA 12.8、RTX 5090、PyTorch3D、checkpoint、依赖
+冲突和真实单窗口推理。当前链路不需要 `torchvision` 或 `torchaudio`。
+
+成功时最后必须显示：
 
 ```text
-工作目录/
-├── duet-edge-realtime/
-├── duet-edge/
-└── data+checkpoint/
-    ├── train-1800.pt
-    └── aist_plusplus_final/
+COMPATIBILITY GATE: PASSED
+You may now continue with P0 in the acceptance guide.
 ```
 
-### 操作 1：进入仓库并激活环境
+只有看到这两行才进入 P0。如果脚本失败，保留从 `[1/7]` 开始的完整终端输出，先解决该错误；
+不要跳到 P1、S1 或性能测试。
+
+脚本不会自动运行需要管理员权限的系统安装。如果它报告缺少 `g++`，只需让管理员执行：
 
 ```bash
-cd /实际路径/duet-edge-realtime
-conda activate edge
-python -m pip install -e '.[dev]'
+sudo apt update
+sudo apt install build-essential
 ```
 
-这里的 `edge` 是能够运行原 Duet-EDGE 的 conda 环境。
+然后重新运行安装脚本。
 
-### 操作 2：设置本次验收使用的路径
-
-```bash
-export REALTIME_ROOT="$(pwd)"
-export DUET_EDGE_ROOT="$(cd ../duet-edge && pwd)"
-export EDGE_CHECKPOINT="$(cd ../data+checkpoint && pwd)/train-1800.pt"
-export AIST_RAW="$(cd ../data+checkpoint/aist_plusplus_final/motions && pwd)/gJB_sBM_cAll_d07_mJB0_ch06.pkl"
-export RUN_ROOT="${REALTIME_ROOT}/outputs/acceptance-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "${RUN_ROOT}"
-```
-
-`RUN_ROOT` 是本次验收的总输出目录。时间戳让每次验收使用一个新目录。
-
-如果示例动作文件不存在，把 `AIST_RAW` 最后一段替换成 `motions/` 中实际存在的文件名。
-
-### 操作 3：检查路径和 GPU
-
-```bash
-test -f "${DUET_EDGE_ROOT}/EDGE.py"
-test -f "${EDGE_CHECKPOINT}"
-test -f "${AIST_RAW}"
-python -c 'import torch; print("CUDA available:", torch.cuda.is_available()); print("GPU:", torch.cuda.get_device_name(0))'
-```
-
-预期看到：
+安装脚本保存的环境证据位于：
 
 ```text
-CUDA available: True
-GPU: <实验室电脑的 GPU 名称>
+outputs/environment-evidence/pip-freeze.txt
+outputs/environment-evidence/torch-environment.txt
 ```
 
-`test` 命令没有输出并返回终端提示符，表示文件存在。
+---
 
-### 操作 4：转换测试动作
+## P0：准备验收输入
 
-AIST++ 原始文件使用 `smpl_trans/smpl_poses/smpl_scaling`。下面的命令把它转换成流式输入适配器使用的 `pos/q/scale`：
+在刚才运行 C0 的同一终端执行：
 
 ```bash
-python scripts/prepare_aist_motion.py \
-  --input "${AIST_RAW}" \
-  --output "${RUN_ROOT}/input_motion.pkl"
+source scripts/start_acceptance_run.sh
 ```
 
-### 输出与预期结果
-
-输出文件：
+脚本会设置本次运行路径、核对仓库/checkpoint/AIST 文件及 SHA256、复采 preflight，并转换测试
+动作。成功时显示：
 
 ```text
-${RUN_ROOT}/input_motion.pkl
+P0 PREPARATION: PASSED
+RUN_ROOT=/home/robot/data/ethan/duet-edge-realtime-v1/duet-edge-realtime/outputs/acceptance-<时间戳>
 ```
 
-转换脚本会校验根位置、关节旋转、scale、NaN/Inf 和最小输入长度。终端会显示原始 60 FPS 帧数、预计的 30 FPS 帧数和 `root_scaled=false`。文件存在即表示 P0 完成：
-
-```bash
-test -f "${RUN_ROOT}/input_motion.pkl"
-```
+必须使用 `source`，这样后续步骤才能继续使用 `${RUN_ROOT}` 等路径变量。
 
 ---
 
@@ -218,16 +260,7 @@ python scripts/check_run.py \
   --min-inference-samples 2
 ```
 
-### 操作 3：运行 CUDA 单窗口确定性测试
-
-```bash
-RUN_CUDA_TESTS=1 \
-DUET_EDGE_CHECKPOINT="${EDGE_CHECKPOINT}" \
-DUET_EDGE_ROOT="${DUET_EDGE_ROOT}" \
-pytest tests/test_cuda_smoke.py
-```
-
-### 操作 4：导出真实 fixture
+### 操作 3：导出真实 fixture
 
 ```bash
 python scripts/export_fixture.py \
@@ -251,7 +284,7 @@ ${RUN_ROOT}/real_fixture.npz
 通过标准：
 
 - `check_run.py` 输出 `passed: true`；
-- CUDA 单窗口确定性测试通过；
+- C0 的 CUDA 单窗口确定性测试已经通过；
 - `summary.json` 中 `backend.backend` 为 `cuda`；
 - `exit_reason` 为 `input_complete`；
 - `real_fixture.npz` 成功生成。
@@ -272,7 +305,6 @@ tests/fixtures/fake_motion.npz
 
 ```bash
 cd "${REALTIME_ROOT}"
-conda activate edge
 python -m duet_edge_realtime.service \
   --config configs/v1.fake.json \
   --output-dir "${RUN_ROOT}" \
@@ -295,6 +327,12 @@ python -m http.server 8080 --directory web
 
 ```text
 http://127.0.0.1:8080
+```
+
+本机已确认安装 Firefox，也可以在图形桌面终端执行：
+
+```bash
+firefox http://127.0.0.1:8080
 ```
 
 点击连接，默认 WebSocket 地址为：
@@ -384,63 +422,11 @@ ${RUN_ROOT}/benchmark.json
 - `deadline_candidate: true` 表示推理 p99 加配置中的 `safety_margin_ms` 后仍小于 2.5 秒，可以持续跟上输入；
 - `recommended_playout_delay_s` 是正式配置建议使用的播放缓冲。
 
-50-step 达标后直接进入 P3。需要评估更低延迟时，在同一 Duet-EDGE 代码、checkpoint、
-输入、seed 和 guidance 配置下运行低-step 候选：
-
-```bash
-for STEPS in 25 20 10; do
-  python -m duet_edge_realtime.service \
-    --config configs/v1.cuda.json \
-    --duet-edge-root "${DUET_EDGE_ROOT}" \
-    --checkpoint "${EDGE_CHECKPOINT}" \
-    --input "${RUN_ROOT}/real_fixture.npz" \
-    --input-format fixture \
-    --output-dir "${RUN_ROOT}" \
-    --loop 51 \
-    --sampling-steps "${STEPS}" \
-    --clock virtual \
-    --sink ndjson \
-    --run-id "s2-benchmark-${STEPS}"
-done
-
-python scripts/summarize_benchmark.py "${RUN_ROOT}" \
-  --pattern "s2-benchmark-*/summary.json" \
-  --min-samples 100 \
-  --output benchmark.json
-```
-
-随后以 50-step 为基线，对每个低-step 候选执行质量回归：
-
-```bash
-python scripts/compare_quality.py \
-  --fixture "${RUN_ROOT}/real_fixture.npz" \
-  --baseline-ndjson "${RUN_ROOT}/s2-benchmark-50/stream.ndjson" \
-  --candidate-ndjson "${RUN_ROOT}/s2-benchmark-25/stream.ndjson" \
-  --duet-edge-root "${DUET_EDGE_ROOT}" \
-  --output "${RUN_ROOT}/quality-25.json"
-```
-
-每个低-step 候选分别执行一次。在 `deadline_candidate: true` 且质量 JSON
-`passed: true` 的候选中选择 steps 最大者。质量 JSON 与 benchmark 一起归档。
+50-step 达标后直接进入 P3。低-step 调优不属于本次 V1 主线验收。
 
 ---
 
 ## P3：写入正式配置
-
-### 输入
-
-- S2 通过的 `steps`；
-- `${RUN_ROOT}/benchmark.json`；
-- 低-step 候选对应的 `${RUN_ROOT}/quality-<steps>.json`；
-- `configs/v1.cuda.json` 中统一配置的 `stream.safety_margin_ms`。
-
-先设置最终选择的 steps：
-
-```bash
-export SAMPLING_STEPS=50
-```
-
-上面的数值是格式示例，实际值使用 S2 选中的候选。
 
 ### 操作
 
@@ -448,22 +434,11 @@ export SAMPLING_STEPS=50
 python scripts/update_runtime_config.py \
   --config configs/v1.cuda.json \
   --benchmark "${RUN_ROOT}/benchmark.json" \
-  --sampling-steps "${SAMPLING_STEPS}"
+  --sampling-steps 50
 python -m json.tool configs/v1.cuda.json
 ```
 
-低于 50 steps 时同时提供对应质量结果，例如：
-
-```bash
-python scripts/update_runtime_config.py \
-  --config configs/v1.cuda.json \
-  --benchmark "${RUN_ROOT}/benchmark.json" \
-  --sampling-steps 25 \
-  --quality "${RUN_ROOT}/quality-25.json"
-```
-
-脚本会校验候选的 `deadline_candidate`、安全余量和推荐播放延迟；低-step 候选同时校验
-质量结果。校验通过后更新：
+脚本会校验 50-step 基准的 deadline、安全余量和推荐播放延迟，然后更新：
 
 - `model.sampling_steps`；
 - `stream.playout_delay_s`；
@@ -587,7 +562,6 @@ ${RUN_ROOT}/s3-final-10min/
 input_motion.pkl
 real_fixture.npz
 benchmark.json
-quality-*.json（仅使用低 steps 候选时）
 acceptance-observations.md
 s3-gpu-resources.csv
 p1-fake/
@@ -601,6 +575,8 @@ s3-final-10min/
 
 ```text
 configs/v1.cuda.json
+outputs/environment-evidence/pip-freeze.txt
+outputs/environment-evidence/torch-environment.txt
 ```
 
 如需重新验收，从 P0 创建一个新的 `RUN_ROOT`，然后按阶段顺序执行即可。
