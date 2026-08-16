@@ -1,6 +1,6 @@
 # Duet-EDGE Realtime V1 Execution Manual
 
-This manual guides either a complete V1 GPU acceptance run or a local fake/core validation run. Numbered scripts perform repeatable work and archive machine-generated evidence. One optional Markdown file is available for operator notes.
+This manual provides the environment setup and execution workflow for a complete V1 GPU acceptance run or a local fake/core validation run. Numbered scripts perform repeatable work and archive machine-generated evidence. One optional Markdown file is available for operator notes.
 
 ## 1. Workspace and Configuration
 
@@ -13,7 +13,7 @@ PROJECT_ROOT/
 └── data+checkpoint/
 ```
 
-Both repositories use the latest code from `main` for this acceptance run.
+Both repositories use the latest code from `main` for this acceptance run. Run the commands below from `PROJECT_ROOT/duet-edge-realtime`.
 
 Review the operational settings once:
 
@@ -25,14 +25,14 @@ The acceptance configuration contains the acceptance profile, relative paths, ex
 
 ### Profiles
 
-`ACCEPTANCE_PROFILE=gpu` is the default and produces formal V1 GPU acceptance evidence. `ACCEPTANCE_PROFILE=local` produces fake/core/Viewer evidence with the lightweight runtime.
+`ACCEPTANCE_PROFILE=gpu` is the default and produces formal V1 GPU acceptance evidence. `ACCEPTANCE_PROFILE=local` produces fake/core/Viewer evidence with the local optional dependency set.
 
 For a local run, change `ACCEPTANCE_PROFILE` to `local` before running.
 
 | Stage | GPU profile | Local profile |
 |---|---|---|
 | 01 | Execute | Execute |
-| 02 | Execute full runtime and CUDA smoke | Execute local install/verify; CUDA smoke is Skipped |
+| 02 | Execute runtime verification and CUDA smoke | Execute runtime verification; CUDA smoke is Skipped |
 | 03–06 | Execute | Execute |
 | 07–08 | Execute | Skipped |
 | 09 | Execute | Execute fake Viewer review |
@@ -40,6 +40,33 @@ For a local run, change `ACCEPTANCE_PROFILE` to `local` before running.
 | 14 | Execute | Execute automatic local evidence/report; final CUDA check is Skipped |
 
 Local preflight records GPU checks as not applicable. Browser capability may be `unknown` when the environment reports no launcher; this remains advisory. A successful local run establishes evidence for core streaming, protocol, fake inference, and Viewer behavior. The GPU profile adds CUDA inference, GPU performance, real-model motion quality, and ten-minute session evidence.
+
+### Runtime Installation
+
+Create and activate the environment:
+
+```bash
+cd PROJECT_ROOT/duet-edge-realtime
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+```
+
+For Local acceptance, install the local environment:
+
+```bash
+python -m pip install -e '.[local]'
+```
+
+For GPU acceptance, ensure `g++` is available, then install CUDA 12.8 torch, PyTorch3D in order:
+
+```bash
+python -m pip install 'torch==2.7.0' --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -e '.[gpu]'
+python -m pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
+```
+
+Reactivate `.venv` in each new environment. Follow the workflow issue instructions to back to this section for fixing.
 
 ## 2. Evidence Model
 
@@ -66,7 +93,7 @@ After Stage 01 initialization, every executed or skipped action creates a number
 | Stage | Purpose | Applicability | Human contribution |
 |---|---|---|---|
 | 01 | Create or resume an acceptance run | Start every run here | — |
-| 02 | Verify or prepare the runtime | Verify every run; install when recommended | — |
+| 02 | Verify the runtime and run smoke testing | Verify every run | — |
 | 03 | Capture machine and asset preflight | Every run | — |
 | 04 | Prepare the AIST++ input | Every new run | — |
 | 05 | Exercise the streaming core | New code/runtime evidence | — |
@@ -96,18 +123,11 @@ bash scripts/v1_execution/01_select_run.sh outputs/acceptance-<timestamp>
 
 Completion signal: the terminal prints the active run and the path to `acceptance-notes.md`.
 
-## 5. Stage 02 — Runtime Preparation
+## 5. Stage 02 — Runtime Smoke
 
 Verify the active environment:
 
 ```bash
-bash scripts/v1_execution/02_verify_runtime.sh
-```
-
-When the verifier recommends an environment update, install the pinned runtime and repeat verification:
-
-```bash
-bash scripts/v1_execution/02_install_runtime.sh
 bash scripts/v1_execution/02_verify_runtime.sh
 ```
 

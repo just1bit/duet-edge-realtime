@@ -3,7 +3,7 @@
 set -euo pipefail
 script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${script_dir}/common.sh"
-run_stage 02 verify-runtime "Run 02_install_runtime.sh when the verifier recommends an environment update, then repeat verification." \
+run_stage 02 verify-runtime "Follow Runtime Installation in docs to update the env, then repeat verification." \
   "${PYTHON_BIN}" "${ACCEPTANCE_SCRIPT_DIR}/lib/verify_runtime.py" \
   --duet-edge-root "${DUET_EDGE_ROOT}" --checkpoint "${EDGE_CHECKPOINT}" \
   --checkpoint-sha256 "${CHECKPOINT_SHA256}" --profile "${ACCEPTANCE_PROFILE}"

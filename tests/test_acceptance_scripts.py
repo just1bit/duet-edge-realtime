@@ -27,8 +27,8 @@ class AcceptanceScriptTests(unittest.TestCase):
 
     def test_numbered_layout_and_shell_syntax(self):
         expected = {
-            "01_initialize.sh", "01_select_run.sh", "02_verify_runtime.sh",
-            "02_install_runtime.sh", "02_cuda_smoke.sh", "03_preflight.sh",
+            "01_initialize.sh", "01_select_run.sh",
+            "02_verify_runtime.sh", "02_cuda_smoke.sh", "03_preflight.sh",
             "04_prepare_input.sh", "05_unit_tests.sh", "05_network_tests.sh",
             "06_run_fake.sh", "06_check_fake.sh", "07_run_real.sh",
             "07_check_real.sh", "08_export_fixture.sh", "09_viewer_stream.sh",

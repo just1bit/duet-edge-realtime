@@ -4,7 +4,7 @@ Duet-EDGE Realtime is a near-realtime streaming partner-dance system built aroun
 
 V1 uses a fixed-latency timeline. The default first-frame budget is `149 / 30 + 2.0 ≈ 6.97 seconds`, and steady-state inference starts every 2.5 seconds. GPU benchmarks determine production `sampling_steps`, `inference_slo_ms`, and `playout_delay_s`; `stream.safety_margin_ms` supplies the shared safety margin.
 
-> **Required model repository:** This repository provides the streaming integration layer, not the Duet-EDGE model implementation or its runtime assets. To run the model, also clone [Duet-EDGE](https://github.com/just1bit/duet-edge) and follow its README to prepare the environment, dataset, and checkpoint.
+> **Required model repository:** This repository provides the streaming integration layer, not the Duet-EDGE model implementation or its runtime assets. To run the model, also clone [Duet-EDGE](https://github.com/just1bit/duet-edge). The environment setup and execution workflow are documented in [V1_EXECUTION_MANUAL.md](V1_EXECUTION_MANUAL.md).
 
 ## Workspace Layout
 
@@ -23,22 +23,9 @@ git clone https://github.com/just1bit/duet-edge-realtime.git
 
 The real backend loads the model at runtime from `DUET_EDGE_ROOT`. Startup verifies the model files, checkpoint structure, and CUDA runtime. The checkpoint normalizer is loaded as a complete Python object with `weights_only=False`, and acceptance assets are identified by SHA256. Each summary records model paths, checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU details.
 
-## Local Quick Start
+## Getting Started
 
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e '.[dev]'
-
-pytest
-
-python -m duet_edge_realtime.service \
-  --config configs/v1.fake.json \
-  --clock virtual \
-  --sink ndjson \
-  --run-id local-smoke
-```
+Use [V1_EXECUTION_MANUAL.md](V1_EXECUTION_MANUAL.md) for the environment setup and execution workflow.
 
 Each run creates `paths.output_dir/<run-id>/` with:
 

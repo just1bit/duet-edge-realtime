@@ -87,12 +87,6 @@ def main() -> None:
         if result.get("passed") is not True or result.get("skipped") is True:
             actions.append(f"Complete the required acceptance action successfully: {path}")
 
-    optional_install = latest_result(root, "02-install-runtime-*.json")
-    if optional_install is not None:
-        path, result = optional_install
-        if result.get("passed") is not True or result.get("skipped") is True:
-            actions.append(f"Complete the attempted runtime installation successfully: {path}")
-
     metadata_path = root / "run-metadata.json"
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

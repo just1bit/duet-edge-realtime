@@ -10,7 +10,25 @@ requires-python = ">=3.10"
 dependencies = ["numpy>=1.24,<2", "websockets>=12"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+local = [
+    "pytest>=8",
+]
+gpu = [
+    "accelerate>=0.24,<1.0",
+    "einops",
+    "fvcore",
+    "iopath",
+    "librosa",
+    "matplotlib",
+    "ninja",
+    "p_tqdm",
+    "scipy",
+    "soundfile",
+    "torch==2.7.0",
+    "tqdm",
+    "wandb",
+    "pytest>=8",
+]
 
 [project.scripts]
 duet-edge-realtime = "duet_edge_realtime.service:main"
