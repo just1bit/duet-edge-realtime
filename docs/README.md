@@ -4,12 +4,21 @@ Duet-EDGE Realtime is a near-realtime streaming partner-dance system built aroun
 
 V1 uses a fixed-latency timeline. The default first-frame budget is `149 / 30 + 2.0 ≈ 6.97 seconds`, and steady-state inference starts every 2.5 seconds. GPU benchmarks determine production `sampling_steps`, `inference_slo_ms`, and `playout_delay_s`; `stream.safety_margin_ms` supplies the shared safety margin.
 
+> **Required model repository:** This repository provides the streaming integration layer, not the Duet-EDGE model implementation or its runtime assets. To run the model, also clone [Duet-EDGE](https://github.com/just1bit/duet-edge) and follow its README to prepare the environment, dataset, and checkpoint.
+
 ## Workspace Layout
 
 ```text
 workspace/
 ├── duet-edge/             # Model repository and runtime assets
 └── duet-edge-realtime/    # Streaming service
+```
+
+Clone both repositories into the same parent directory:
+
+```bash
+git clone https://github.com/just1bit/duet-edge.git
+git clone https://github.com/just1bit/duet-edge-realtime.git
 ```
 
 The real backend loads the model at runtime from `DUET_EDGE_ROOT`. Startup verifies the model files, checkpoint structure, and CUDA runtime. The checkpoint normalizer is loaded as a complete Python object with `weights_only=False`, and acceptance assets are identified by SHA256. Each summary records model paths, checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU details.
