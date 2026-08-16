@@ -25,7 +25,7 @@ The acceptance configuration contains the acceptance profile, relative paths, ex
 
 ### Profiles
 
-`ACCEPTANCE_PROFILE=gpu` is the default and is the only profile that produces formal V1 GPU acceptance evidence. `ACCEPTANCE_PROFILE=local` validates the fake/core/Viewer path without PyTorch, CUDA, or an NVIDIA GPU.
+`ACCEPTANCE_PROFILE=gpu` is the default and produces formal V1 GPU acceptance evidence. `ACCEPTANCE_PROFILE=local` produces fake/core/Viewer evidence with the lightweight runtime.
 
 For a local run, change `ACCEPTANCE_PROFILE` to `local` before running.
 
@@ -39,7 +39,7 @@ For a local run, change `ACCEPTANCE_PROFILE` to `local` before running.
 | 10–13 | Execute as applicable | Skipped |
 | 14 | Execute | Execute automatic local evidence/report; final CUDA check is Skipped |
 
-Local preflight records GPU checks as not applicable. Browser capability may be `unknown` when no browser launcher is discoverable; this is advisory rather than a failure. A successful local run does not validate CUDA inference, GPU performance, real-model motion quality, or the ten-minute GPU session.
+Local preflight records GPU checks as not applicable. Browser capability may be `unknown` when the environment reports no launcher; this remains advisory. A successful local run establishes evidence for core streaming, protocol, fake inference, and Viewer behavior. The GPU profile adds CUDA inference, GPU performance, real-model motion quality, and ten-minute session evidence.
 
 ## 2. Evidence Model
 
@@ -59,7 +59,7 @@ outputs/acceptance-20260814-143000/
 └── final-10min/
 ```
 
-After Stage 01 initialization, every executed or skipped action creates a numbered log and JSON result. Repeated actions create new attempts and preserve earlier evidence. Automatic metrics, hashes, test results, and artifact inventories stay in generated evidence. `acceptance-notes.md` is an independent operator record and does not affect automatic evidence validation.
+After Stage 01 initialization, every executed or skipped action creates a numbered log and JSON result. Repeated actions create new attempts and preserve earlier evidence. Automatic metrics, hashes, test results, and artifact inventories stay in generated evidence. `acceptance-notes.md` serves as an independent operator record, while automatic validation uses generated evidence.
 
 ## 3. Stage Overview
 
@@ -203,7 +203,7 @@ Open the printed HTTP address and connect to the WebSocket endpoint from `config
 4. Fake NDJSON replay;
 5. Real NDJSON replay for orientation, drift, flips, ground axis, naturalness, and window boundaries.
 
-Record useful visual judgments or screenshot/timestamp references under `Viewer Review` in `acceptance-notes.md`. Real NDJSON review applies only to the GPU profile. The service and web-server logs are archived automatically; stopping the web server with Ctrl-C is an accepted completion.
+Record useful visual judgments or screenshot/timestamp references under `Viewer Review` in `acceptance-notes.md`. The GPU profile includes real NDJSON review. The service and web-server logs are archived automatically; stopping the web server with Ctrl-C is an accepted completion.
 
 ## 13. Stage 10 — 50-Step Baseline
 
@@ -288,7 +288,7 @@ bash scripts/v1_execution/14_check_evidence.sh
 bash scripts/v1_execution/14_build_report.sh
 ```
 
-The final validator checks duration, frame count, inference performance, playout timing, queue bounds, jitter, lifecycle, and EOS. The evidence checker confirms automatic artifacts for the selected profile; it only checks that `acceptance-notes.md` exists and never validates its content. The report builder creates `${RUN_ROOT}/acceptance-report.md` with links to stage results, logs, and indexed evidence.
+The final validator checks duration, frame count, inference performance, playout timing, queue bounds, jitter, lifecycle, and EOS. The evidence checker confirms automatic artifacts for the selected profile and records the presence of `acceptance-notes.md`; its content remains an independent operator review. The report builder creates `${RUN_ROOT}/acceptance-report.md` with links to stage results, logs, and indexed evidence.
 
 Add any final judgment or follow-up to `acceptance-notes.md`, then run the report builder. One invocation refreshes the report after its own archived result is written.
 

@@ -53,8 +53,22 @@ eos
     "z": "up",
     "units": "model-space"
   },
-  "timebases": {},
-  "latency_budget": {},
+  "axis": "x=lateral,y=depth,z=up",
+  "timebases": {
+    "source_time_s": "seconds from source frame 0",
+    "target_playout_offset_s": "monotonic seconds from service start",
+    "emitted_wall_time_s": "Unix epoch seconds",
+    "emitted_monotonic_offset_s": "monotonic seconds from service start"
+  },
+  "fixed_latency_s": 6.9666666667,
+  "latency_budget": {
+    "window_fill_s": 4.9666666667,
+    "playout_delay_s": 2.0,
+    "hop_period_s": 2.5,
+    "inference_slo_ms": 1900.0,
+    "safety_margin_ms": 100.0,
+    "jitter_slo_ms": 20.0
+  },
   "delivery": {
     "timeline": "contiguous-exactly-once-commit",
     "recorder": "complete",
@@ -99,11 +113,11 @@ eos
 | `type` | 核心字段 | 用途 |
 |---|---|---|
 | `state` | `state`, `wall_time_s`, `monotonic_offset_s` | 生命周期转换 |
-| `metrics` | p95、队列、总计/每客户端丢帧、underflow、deadline miss | 实时运行状态 |
+| `metrics` | p95、队列、总计/每客户端丢帧、underflow、deadline miss、backpressure waits | 实时运行状态 |
 | `backpressure` | `window_id`, `policy`, `wait_ms` | 输入等待推理容量 |
 | `overload` | `window_id`, `policy`, `reason` | fail 策略触发 |
 | `degraded` | `window_id`, `observed_ms`, `slo_ms` | 推理 SLO miss |
 | `eos` | `frames`, `reason` | 正常结束 |
 | `error` | `error` | 结构化错误 |
 
-Viewer 连接后先接收 hello，随后接收当前 state、最新 metrics、终态消息和实时帧。degraded、backpressure 与 overload 作为实时事件发送，完整历史保存在 NDJSON。客户端可使用 `frame_id` 检测展示帧跳跃，并使用 NDJSON 获得完整提交序列。
+Viewer 连接后先接收 hello，随后接收当前 state、最新 metrics、终态消息和实时帧。degraded、backpressure 与 overload 作为实时事件发送，完整历史由 NDJSON 保存。每个 Viewer mailbox 按消息类型合并待发送的 state、metrics、degraded、backpressure 与 overload，并在帧通道达到容量时保留最新帧。客户端可使用 `frame_id` 识别展示帧跨度，并使用 NDJSON 获得完整提交序列。

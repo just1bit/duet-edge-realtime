@@ -1,6 +1,6 @@
 # Duet-EDGE Realtime V1
 
-Duet-EDGE Realtime is a near-realtime streaming partner-dance system built around the external Duet-EDGE model repository. The V1 path runs 30 FPS motion replay through 150/75 sliding windows, lead-only inference, online continuity processing, continuous timeline commits, playout buffering, NDJSON/WebSocket delivery, and a Canvas Viewer.
+Duet-EDGE Realtime is a near-realtime streaming partner-dance system built around the external Duet-EDGE model repository. The V1 path runs 30 FPS motion replay through 150/75 sliding windows, lead-conditioned inference, online continuity processing, continuous timeline commits, playout buffering, NDJSON/WebSocket delivery, and a Canvas Viewer.
 
 V1 uses a fixed-latency timeline. The default first-frame budget is `149 / 30 + 2.0 ≈ 6.97 seconds`, and steady-state inference starts every 2.5 seconds. GPU benchmarks determine production `sampling_steps`, `inference_slo_ms`, and `playout_delay_s`; `stream.safety_margin_ms` supplies the shared safety margin.
 
@@ -12,7 +12,7 @@ workspace/
 └── duet-edge-realtime/    # Streaming service
 ```
 
-The real backend loads the model at runtime from `DUET_EDGE_ROOT`. Startup verifies the model files, checkpoint structure, and CUDA runtime. Each summary records model paths, checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU details.
+The real backend loads the model at runtime from `DUET_EDGE_ROOT`. Startup verifies the model files, checkpoint structure, and CUDA runtime. The checkpoint normalizer is loaded as a complete Python object with `weights_only=False`, and acceptance assets are identified by SHA256. Each summary records model paths, checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU details.
 
 ## Local Quick Start
 
@@ -33,8 +33,9 @@ python -m duet_edge_realtime.service \
 Each run creates `paths.output_dir/<run-id>/` with:
 
 - `effective_config.json`: the final merged command-line, environment, and JSON configuration;
-- `stream.ndjson`: hello, state, frame, metrics, degraded/backpressure, EOS, and error messages;
 - `summary.json`: versions, lifecycle, windows, inference, queues, commits, playout, and SLO results.
+
+Selecting the `ndjson` sink also creates `stream.ndjson` with hello, state, frame, metrics, degraded/backpressure, EOS, and error messages.
 
 Path precedence is:
 
@@ -77,16 +78,16 @@ python -m duet_edge_realtime.service \
   --sink ndjson
 ```
 
-Raw `motions/*.pkl` inputs use `--root-scaled false`. Inputs already scaled to model units under `motions_sliced/*.pkl` use `--root-scaled true`. The parameterized DDIM interface supports the 50-step baseline and lower-step performance/quality candidates.
+Raw `motions/*.pkl` inputs use `--root-scaled false`. Inputs already scaled to model units under `motions_sliced/*.pkl` use `--root-scaled true`. The parameterized DDIM interface maps `model.sampling_steps` to `sampling_timesteps` and forwards `model.eta`; it supports the 50-step baseline and lower-step performance/quality candidates.
 
 ## Queues and Deadlines
 
 Key settings live under `stream`:
 
 - `inference_queue_policy=block`: input waits for inference capacity during complete file replay;
-- `inference_queue_policy=fail`: a full queue completes the session with diagnostics;
+- `inference_queue_policy=fail`: queue capacity produces overload diagnostics and a completed run record;
 - `deadline_miss_policy=continue`: the service records an inference SLO event and continues playout;
-- `deadline_miss_policy=fail`: the service completes the session after an SLO event;
+- `deadline_miss_policy=fail`: an inference SLO event produces structured diagnostics and a completed run record;
 - `output_queue_size`: complete committed batches between inference and playout;
 - `viewer_queue_frames`: newest frames retained for each Viewer client.
 

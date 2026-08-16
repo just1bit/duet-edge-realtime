@@ -54,9 +54,9 @@ duet-edge-realtime
   -> EDGE, normalizer, diffusion, SMPLSkeleton
 ```
 
-Real-backend startup validates the model directory, core modules, checkpoint structure, CUDA runtime, and finite numerical output. The run summary records the model path, checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU properties.
+Real-backend startup validates the model directory, core modules, checkpoint structure, CUDA runtime, and finite numerical output. The checkpoint normalizer is loaded as a complete Python object with `weights_only=False`, and acceptance configuration supplies its expected SHA256. The run summary records the model path, observed checkpoint SHA256, inference parameters, PyTorch/CUDA versions, and GPU properties.
 
-The realtime service uses Duet-EDGE's parameterized DDIM interface and existing runtime structure. Real-model smoke tests, protocol tests, numerical tests, and quality comparisons exercise the complete inference path.
+The realtime service uses Duet-EDGE's parameterized DDIM interface and existing runtime structure. `model.sampling_steps` maps to `sampling_timesteps`, while `model.eta` maps to `eta`. Real-model smoke tests, protocol tests, numerical tests, and quality comparisons exercise the complete inference path.
 
 ### 3.2 Backend Interface
 
@@ -248,7 +248,7 @@ joints[24][3]
 }
 ```
 
-Path values use command line, environment variable, then JSON precedence. Command-line options also support backend, root scaling, sampling steps, and playout delay. Every service run writes `effective_config.json`, `stream.ndjson`, and `summary.json` in an independent output directory.
+Path values use command line, environment variable, then JSON precedence. Command-line options also support backend, input format, root scaling, sampling steps, playout delay, fixture repetition, sink selection, and run identity. Every service run writes `effective_config.json` and `summary.json` in an independent output directory; selecting the NDJSON sink adds `stream.ndjson`.
 
 ## 9. Repository Structure
 
