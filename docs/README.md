@@ -30,6 +30,7 @@ python3.10 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e '.[dev]'
+
 pytest
 
 python -m duet_edge_realtime.service \

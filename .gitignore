@@ -11,3 +11,5 @@ summary.json
 benchmark.json
 acceptance-report.md
 .DS_Store
+.env
+uv.lock
