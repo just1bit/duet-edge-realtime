@@ -369,6 +369,8 @@ class AcceptanceScriptTests(unittest.TestCase):
                 {"type": "frame", "schema_version": "2.0.0", "frame_id": 0,
                  "seq": 0, "motion_time_s": 0, "commit_kind": "tail",
                  "commit_start_frame_id": 0, "commit_end_frame_id": 1,
+                 "lead_joints": [[0, 0, 0]] * 24,
+                 "companion_joints": [[0, 0, 0]] * 24,
                  "joints": [[0, 0, 0]] * 24},
                 {"type": "eos", "reason": "input_complete"},
             ]

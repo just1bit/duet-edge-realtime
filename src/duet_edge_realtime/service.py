@@ -283,7 +283,8 @@ class StreamingService:
         )
 
     async def _run_inference(self) -> None:
-        processor = OnlineContinuityProcessor(self.backend)
+        companion_processor = OnlineContinuityProcessor(self.backend)
+        lead_processor = OnlineContinuityProcessor(self.backend)
         committer = TimelineCommitter()
         last_window = None
         while True:
@@ -295,11 +296,13 @@ class StreamingService:
                         if last_window.valid_frames == self.config.window_frames
                         else last_window.valid_frames
                     )
-                    joints = processor.flush(flush_frames)
+                    joints = companion_processor.flush(flush_frames)
+                    lead_joints = lead_processor.flush(flush_frames)
                     batch = committer.commit(
                         last_window.window_id,
                         last_window.start_seq + self.config.hop_frames,
                         joints,
+                        lead_joints=lead_joints,
                         commit_kind="tail",
                     )
                     self.metrics.record_commit(len(batch.joints))
@@ -328,11 +331,17 @@ class StreamingService:
             # Every generated successor resolves the full previous overlap.
             # A partial EOF's real tail lives in the successor's pending half
             # and is trimmed when STOP is handled above.
-            joints = processor.process(chunk.motion, commit_frames=self.config.hop_frames)
+            joints = companion_processor.process(
+                chunk.motion, commit_frames=self.config.hop_frames
+            )
+            lead_joints = lead_processor.process(
+                window.motion, commit_frames=self.config.hop_frames
+            )
             batch = committer.commit(
                 window.window_id,
                 window.start_seq,
                 joints,
+                lead_joints=lead_joints,
                 trigger_monotonic_s=window.trigger_time_s,
             )
             self.metrics.record_commit(len(batch.joints))
@@ -371,7 +380,7 @@ class StreamingService:
                 if self._input_complete.is_set():
                     await self._transition(ServiceState.DRAINING)
             batch_deadline = next_batch_deadline
-            for index, pose in enumerate(batch.joints):
+            for index, (pose, lead_pose) in enumerate(zip(batch.joints, batch.lead_joints)):
                 deadline = batch_deadline + index / self.config.fps
                 before = self.clock.now()
                 # Millisecond-scale scheduler lateness is reported as jitter.
@@ -415,6 +424,8 @@ class StreamingService:
                     "commit_end_frame_id": batch.end_frame_id,
                     "commit_kind": batch.commit_kind,
                     "flags": ["generated", batch.commit_kind],
+                    "lead_joints": lead_pose.tolist(),
+                    "companion_joints": pose.tolist(),
                     "joints": pose.tolist(),
                 }
                 await self.sink.send(message)

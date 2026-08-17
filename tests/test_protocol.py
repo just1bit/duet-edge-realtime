@@ -8,6 +8,7 @@ import numpy as np
 
 from duet_edge_realtime.backends.fake import FakeInferenceBackend
 from duet_edge_realtime.config import RealtimeConfig, StreamConfig
+from duet_edge_realtime.continuity import OnlineContinuityProcessor
 from duet_edge_realtime.input_adapters import NormalizedFixtureAdapter
 from duet_edge_realtime.playout import VirtualClock
 from duet_edge_realtime.schemas import MotionFrame
@@ -76,6 +77,11 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(len(frames), 300)
             self.assertEqual([frame["seq"] for frame in frames], list(range(300)))
             self.assertTrue(all(len(frame["joints"]) == 24 for frame in frames))
+            self.assertTrue(all(len(frame["lead_joints"]) == 24 for frame in frames))
+            self.assertTrue(all(len(frame["companion_joints"]) == 24 for frame in frames))
+            self.assertTrue(all(
+                frame["joints"] == frame["companion_joints"] for frame in frames
+            ))
             self.assertTrue(all(frame["frame_id"] == frame["seq"] for frame in frames))
             self.assertTrue(all(frame["schema_version"] == "2.0.0" for frame in frames))
             self.assertEqual(messages[-1]["type"], "eos")
@@ -90,6 +96,23 @@ class ProtocolTests(unittest.TestCase):
                 [round(window["trigger_time_s"], 6) for window in summary["windows"]["recent"]],
                 [4.966667, 7.466667, 9.966667],
             )
+
+    def test_tracked_fake_fixture_is_upright_and_articulated(self):
+        fixture = Path(__file__).parent / "fixtures" / "fake_motion.npz"
+        motion = np.load(fixture)["motion_151"]
+        processor = OnlineContinuityProcessor(FakeInferenceBackend())
+        joints = np.concatenate([
+            processor.process(motion[:150]),
+            processor.process(motion[75:225]),
+            processor.process(motion[150:300]),
+            processor.flush(),
+        ])
+        relative = joints - joints[:, :1]
+        median_span = np.median(np.ptp(joints, axis=1), axis=0)
+        moving_joints = np.linalg.norm(np.ptp(relative, axis=0), axis=1) > 0.02
+        self.assertGreater(median_span[2], median_span[1] * 2)
+        self.assertGreater(np.median(joints[:, 15, 2] - joints[:, 0, 2]), 0.5)
+        self.assertGreaterEqual(np.count_nonzero(moving_joints), 8)
 
     def test_partial_tail_preserves_exact_length(self):
         for count in (151, 224):

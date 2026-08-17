@@ -58,6 +58,8 @@ python3 -m http.server 8080 --directory web
 
 Open `http://127.0.0.1:8080` and connect to `ws://127.0.0.1:8765`. The Viewer also supports local `stream.ndjson` replay.
 
+The canvas shows the lead (blue) and generated companion (cyan) side by side in the Z-up coordinate system. The horizontal display separation is visual only; the streamed joint coordinates remain unchanged.
+
 Each WebSocket client owns an independent latest-frame-wins queue, while control messages retain the latest state by type. NDJSON records the complete committed timeline. See [PROTOCOL.md](PROTOCOL.md) for protocol fields and examples.
 
 ## CUDA Backend

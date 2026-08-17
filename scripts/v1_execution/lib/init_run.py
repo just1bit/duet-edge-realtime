@@ -15,6 +15,12 @@ NOTES = """# Acceptance Notes
 
 ## Viewer Review
 
+- [ ] Blue lead and cyan companion are both visible and labelled:
+- [ ] Both skeletons are upright in the default Z-up view:
+- [ ] Limbs move relative to their roots continuously (not frozen/root-only):
+- [ ] Lifecycle, reconnect, fake replay, and profile-required real replay pass:
+- Screenshot/timestamp evidence:
+
 ## Performance
 
 ## Manual Changes

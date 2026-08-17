@@ -102,11 +102,13 @@ eos
   "commit_end_frame_id": 150,
   "commit_kind": "stable",
   "flags": ["generated", "stable"],
-  "joints": [[0.0, 0.0, 0.0]]
+  "lead_joints": [[-0.5, 0.0, 1.0]],
+  "companion_joints": [[0.5, 0.0, 1.0]],
+  "joints": [[0.5, 0.0, 1.0]]
 }
 ```
 
-`frame_id` 与 `seq` 连续递增。提交区间使用半开区间 `[commit_start_frame_id, commit_end_frame_id)`。`commit_kind=stable` 表示滑窗稳定区，`tail` 表示输入结束后的最终有效尾段。实际 `joints` 包含 24 个三维坐标。
+`frame_id` 与 `seq` 连续递增。提交区间使用半开区间 `[commit_start_frame_id, commit_end_frame_id)`。`commit_kind=stable` 表示滑窗稳定区，`tail` 表示输入结束后的最终有效尾段。`lead_joints` 与 `companion_joints` 各包含 24 个 Z-up 三维坐标；`joints` 保留为 `companion_joints` 的兼容别名，内容必须完全相同。
 
 ## 状态与诊断
 
