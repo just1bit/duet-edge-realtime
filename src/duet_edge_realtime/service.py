@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .backends.duet_edge import CudaDuetEdgeBackend
 from .backends.fake import FakeInferenceBackend
+from .backends.recorded import RecordedInferenceBackend
 from .config import RealtimeConfig
 from .continuity import OnlineContinuityProcessor
 from .input_adapters import AISTFileReplayAdapter, NormalizedFixtureAdapter
@@ -477,7 +478,7 @@ async def _record_startup_failure(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Duet-EDGE V1 streaming service")
     parser.add_argument("--config", default="configs/v1.fake.json")
-    parser.add_argument("--backend", choices=("fake", "cuda"))
+    parser.add_argument("--backend", choices=("fake", "recorded", "cuda"))
     parser.add_argument("--input")
     parser.add_argument("--input-format", choices=("fixture", "aist"))
     parser.add_argument("--root-scaled", choices=("true", "false"))
@@ -561,6 +562,8 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     if backend_name == "fake":
         backend = FakeInferenceBackend(delay_s=args.fake_delay_s)
+    elif backend_name == "recorded":
+        backend = RecordedInferenceBackend(input_path)
     else:
         backend = CudaDuetEdgeBackend(
             checkpoint,
@@ -610,7 +613,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     try:
         input_format = args.input_format or (
-            "fixture" if backend_name == "fake" else "aist"
+            "fixture" if backend_name in {"fake", "recorded"} else "aist"
         )
         if input_format == "fixture":
             source = NormalizedFixtureAdapter(input_path, config.fps, loop=args.loop)

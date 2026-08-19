@@ -95,8 +95,8 @@ class RealtimeConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
 
     def __post_init__(self) -> None:
-        if self.backend not in {"fake", "cuda"}:
-            raise ValueError("backend must be fake or cuda")
+        if self.backend not in {"fake", "recorded", "cuda"}:
+            raise ValueError("backend must be fake, recorded or cuda")
 
     @classmethod
     def load(cls, path: str | Path) -> "RealtimeConfig":

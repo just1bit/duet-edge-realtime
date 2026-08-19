@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,26 +9,26 @@
 <body>
   <main>
     <header>
-      <div><p class="eyebrow">DUET-EDGE / STREAM V1</p><h1>伴舞骨架实时监看</h1></div>
-      <span id="connection" class="badge offline">未连接</span>
+      <div><p class="eyebrow">DUET-EDGE / STREAM V1</p><h1>Live Companion Skeleton Viewer</h1></div>
+      <span id="connection" class="badge offline">Disconnected</span>
     </header>
     <section class="controls">
       <label>WebSocket <input id="ws-url" value="ws://127.0.0.1:8765"></label>
-      <button id="connect">连接实时流</button>
-      <label class="file">回放 NDJSON<input id="file" type="file" accept=".ndjson,application/x-ndjson"></label>
-      <button id="view" class="ghost">切换视角</button>
+      <button id="connect">Connect to Live Stream</button>
+      <label class="file">Play NDJSON<input id="file" type="file" accept=".ndjson,application/x-ndjson"></label>
+      <button id="view" class="ghost">Change View</button>
     </section>
     <section class="stage">
       <canvas id="canvas" width="1100" height="680"></canvas>
-      <div class="latency"><span>固定链路延迟</span><strong id="latency">—</strong></div>
+      <div class="latency"><span>Fixed End-to-End Latency</span><strong id="latency">—</strong></div>
     </section>
     <section class="metrics">
-      <article><span>输出帧</span><strong id="frame">—</strong></article>
-      <article><span>动作时间</span><strong id="motion-time">—</strong></article>
-      <article><span>推理 P95</span><strong id="p95">—</strong></article>
-      <article><span>队列高水位</span><strong id="queue">—</strong></article>
-      <article><span>展示丢帧</span><strong id="dropped">0</strong></article>
-      <article><span>运行状态</span><strong id="status">待机</strong></article>
+      <article><span>Output Frame</span><strong id="frame">—</strong></article>
+      <article><span>Motion Time</span><strong id="motion-time">—</strong></article>
+      <article><span>Inference P95</span><strong id="p95">—</strong></article>
+      <article><span>Queue High-Water Mark</span><strong id="queue">—</strong></article>
+      <article><span>Dropped Viewer Frames</span><strong id="dropped">0</strong></article>
+      <article><span>Runtime Status</span><strong id="status">Idle</strong></article>
     </section>
   </main>
   <script src="viewer.js?v=dual-zup-2"></script>

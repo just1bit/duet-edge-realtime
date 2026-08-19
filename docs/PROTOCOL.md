@@ -1,22 +1,22 @@
 # Duet-EDGE Stream Protocol V2
 
-协议名称为 `duet-edge-stream/v2`，消息 schema 版本为 `2.0.0`。NDJSON 每行保存一个 JSON 消息；WebSocket 每个文本消息承载一个 JSON 对象。
+The protocol name is `duet-edge-stream/v2`, and the message schema version is `2.0.0`. Each NDJSON line contains one JSON message, and each WebSocket text message contains one JSON object.
 
-## 标识与时间基准
+## Identifiers and Timebases
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `run_id` | 运行目录与一次执行的标识 |
-| `session_id` | 输入、推理和播放生命周期标识；V1 与 `run_id` 相同 |
-| `stream_id` | 输出动作流标识，格式为 `<run_id>:companion-motion` |
-| `source_time_s` | 从输入源帧 0 开始的事件时间 |
-| `target_playout_offset_s` | 从服务单调时钟起点开始的目标播放时间 |
-| `emitted_monotonic_offset_s` | 从服务单调时钟起点开始的实际发送时间 |
-| `emitted_wall_time_s` | Unix epoch 秒，用于跨服务日志关联 |
+| `run_id` | Identifies both the run directory and a single execution |
+| `session_id` | Identifies the input, inference, and playout lifecycle; in V1, it is identical to `run_id` |
+| `stream_id` | Identifies the output motion stream, in the form `<run_id>:companion-motion` |
+| `source_time_s` | Event time measured from input source frame 0 |
+| `target_playout_offset_s` | Target playout time measured from the service's monotonic-clock origin |
+| `emitted_monotonic_offset_s` | Actual emission time measured from the service's monotonic-clock origin |
+| `emitted_wall_time_s` | Unix epoch seconds used to correlate logs across services |
 
-## 消息顺序
+## Message Sequence
 
-正常文件运行形成以下序列：
+A successful file-based run produces the following sequence:
 
 ```text
 hello
@@ -25,12 +25,12 @@ state(buffering)
 state(playing)
 frame / metrics / degraded / backpressure ...
 state(draining)
-frame / metrics ...（已入队窗口和尾段继续播放）
+frame / metrics ... (queued windows and the tail continue playing)
 state(finished)
 eos
 ```
 
-运行错误形成 `state(failed)` 和 `error`，已提交的 frame 保留在 NDJSON 中。
+A failed run produces `state(failed)` and `error`. Frames committed before the failure remain in the NDJSON output.
 
 ## hello
 
@@ -78,7 +78,7 @@ eos
 }
 ```
 
-实际 hello 的 `joint_names` 和 `parents` 均包含 24 项。
+In an actual `hello` message, `joint_names` and `parents` each contain 24 entries.
 
 ## frame
 
@@ -108,18 +108,18 @@ eos
 }
 ```
 
-`frame_id` 与 `seq` 连续递增。提交区间使用半开区间 `[commit_start_frame_id, commit_end_frame_id)`。`commit_kind=stable` 表示滑窗稳定区，`tail` 表示输入结束后的最终有效尾段。`lead_joints` 与 `companion_joints` 各包含 24 个 Z-up 三维坐标；`joints` 保留为 `companion_joints` 的兼容别名，内容必须完全相同。
+`frame_id` and `seq` increase contiguously. Commit ranges use the half-open interval `[commit_start_frame_id, commit_end_frame_id)`. A `commit_kind` of `stable` identifies the stable region of a sliding window, while `tail` identifies the final valid tail after the input ends. Both `lead_joints` and `companion_joints` contain 24 three-dimensional, Z-up coordinates. `joints` remains as a compatibility alias for `companion_joints`, and their contents must be identical.
 
-## 状态与诊断
+## Status and Diagnostics
 
-| `type` | 核心字段 | 用途 |
+| `type` | Key fields | Purpose |
 |---|---|---|
-| `state` | `state`, `wall_time_s`, `monotonic_offset_s` | 生命周期转换 |
-| `metrics` | p95、队列、总计/每客户端丢帧、underflow、deadline miss、backpressure waits | 实时运行状态 |
-| `backpressure` | `window_id`, `policy`, `wait_ms` | 输入等待推理容量 |
-| `overload` | `window_id`, `policy`, `reason` | fail 策略触发 |
-| `degraded` | `window_id`, `observed_ms`, `slo_ms` | 推理 SLO miss |
-| `eos` | `frames`, `reason` | 正常结束 |
-| `error` | `error` | 结构化错误 |
+| `state` | `state`, `wall_time_s`, `monotonic_offset_s` | Lifecycle transitions |
+| `metrics` | p95, queues, total/per-client dropped frames, underflows, deadline misses, backpressure waits | Real-time runtime status |
+| `backpressure` | `window_id`, `policy`, `wait_ms` | Input waiting for inference capacity |
+| `overload` | `window_id`, `policy`, `reason` | Activation of the `fail` policy |
+| `degraded` | `window_id`, `observed_ms`, `slo_ms` | Inference SLO miss |
+| `eos` | `frames`, `reason` | Normal completion |
+| `error` | `error` | Structured error |
 
-Viewer 连接后先接收 hello，随后接收当前 state、最新 metrics、终态消息和实时帧。degraded、backpressure 与 overload 作为实时事件发送，完整历史由 NDJSON 保存。每个 Viewer mailbox 按消息类型合并待发送的 state、metrics、degraded、backpressure 与 overload，并在帧通道达到容量时保留最新帧。客户端可使用 `frame_id` 识别展示帧跨度，并使用 NDJSON 获得完整提交序列。
+After connecting, a Viewer first receives `hello`, followed by the current `state`, the latest `metrics`, any terminal message, and live frames. `degraded`, `backpressure`, and `overload` are delivered as real-time events, while NDJSON preserves their complete history. Each Viewer mailbox coalesces pending `state`, `metrics`, `degraded`, `backpressure`, and `overload` messages by type. When the frame channel reaches capacity, it retains the latest frame. Clients can use `frame_id` to detect gaps between displayed frames and use NDJSON to recover the complete committed sequence.

@@ -199,7 +199,7 @@ The validator confirms the CUDA backend, checkpoint evidence, inference samples,
 bash scripts/v1_execution/08_export_fixture.sh
 ```
 
-The output `${RUN_ROOT}/real_fixture.npz` contains normalized lead motion, generated motion, lead and generated joints, and model metadata. Later stages reuse this compact fixture.
+The output `${RUN_ROOT}/real_fixture.npz` contains normalized lead motion, generated motion, lead and generated joints, and model metadata. Later stages reuse this compact fixture. Stage 08 also exports and locally verifies `${RUN_ROOT}/real_golden_corpus.npz`, containing two consecutive CUDA windows for later replay with `configs/v1.recorded.json`; before leaving the laboratory, confirm the terminal prints `Golden corpus verified: 2 consecutive windows` and retain the complete `RUN_ROOT`.
 
 ## 12. Stage 09 — Viewer Review
 

@@ -40,36 +40,36 @@ function draw(frame) {
   const companion = frame.companion_joints || frame.joints;
   const lead = frame.lead_joints;
   if(lead && companion) {
-    drawSkeleton(lead, -215, '#62a8ff', '领舞 / LEAD');
-    drawSkeleton(companion, 215, '#5ee8d7', '伴舞 / COMPANION');
+    drawSkeleton(lead, -215, '#62a8ff', 'LEAD DANCER');
+    drawSkeleton(companion, 215, '#5ee8d7', 'COMPANION DANCER');
   } else if(companion) {
-    drawSkeleton(companion, 0, '#5ee8d7', '伴舞 / COMPANION');
+    drawSkeleton(companion, 0, '#5ee8d7', 'COMPANION DANCER');
   }
 }
 
 function handle(message) {
-  if(message.type==='hello') { parents=message.parents; streamFps=message.fps||30; $('latency').textContent=`${message.fixed_latency_s.toFixed(2)} s`; $('status').textContent='流已就绪'; }
+  if(message.type==='hello') { parents=message.parents; streamFps=message.fps||30; $('latency').textContent=`${message.fixed_latency_s.toFixed(2)} s`; $('status').textContent='Stream Ready'; }
   if(message.type==='state') {
-    const labels={starting:'启动中',buffering:'缓冲中',playing:'播放中',draining:'尾段提交',finished:'已完成',failed:'运行错误'};
+    const labels={starting:'Starting',buffering:'Buffering',playing:'Playing',draining:'Committing Tail',finished:'Finished',failed:'Runtime Error'};
     $('status').textContent=labels[message.state]||message.state;
   }
   if(message.type==='frame') { lastFrame=message; draw(message); $('frame').textContent=message.seq; $('motion-time').textContent=`${message.motion_time_s.toFixed(2)} s`; }
   if(message.type==='metrics') { $('p95').textContent=message.inference_p95_ms==null?'—':`${message.inference_p95_ms.toFixed(1)} ms`; $('queue').textContent=`${message.input_backlog}/${message.output_backlog}`; $('dropped').textContent=message.dropped_view_frames; }
-  if(message.type==='degraded') $('status').textContent='推理延迟超过 SLO';
-  if(message.type==='backpressure') $('status').textContent='输入等待推理容量';
-  if(message.type==='overload') $('status').textContent='推理队列已满';
-  if(message.type==='eos') $('status').textContent=`完成 / ${message.frames} 帧`;
-  if(message.type==='error') $('status').textContent='运行错误';
+  if(message.type==='degraded') $('status').textContent='Inference Latency Exceeded SLO';
+  if(message.type==='backpressure') $('status').textContent='Input Waiting for Inference Capacity';
+  if(message.type==='overload') $('status').textContent='Inference Queue Full';
+  if(message.type==='eos') $('status').textContent=`Complete / ${message.frames} Frames`;
+  if(message.type==='error') $('status').textContent='Runtime Error';
 }
 
 $('connect').onclick = () => {
   if(ws) ws.close();
   ws = new WebSocket($('ws-url').value);
-  setConnection('连接中');
-  ws.onopen=()=>setConnection('实时流',true);
+  setConnection('Connecting');
+  ws.onopen=()=>setConnection('Live Stream',true);
   ws.onmessage=e=>handle(JSON.parse(e.data));
-  ws.onerror=()=>setConnection('连接错误');
-  ws.onclose=()=>setConnection('已断开');
+  ws.onerror=()=>setConnection('Connection Error');
+  ws.onclose=()=>setConnection('Disconnected');
 };
 
 $('view').onclick=()=>{view=(view+1)%3;if(lastFrame)draw(lastFrame)};
@@ -78,6 +78,6 @@ $('file').onchange = async event => {
   const lines=(await event.target.files[0].text()).split(/\r?\n/).filter(Boolean);
   const messages=lines.map(JSON.parse); messages.filter(m=>m.type==='hello').forEach(handle);
   const frames=messages.filter(m=>m.type==='frame'); let i=0;
-  setConnection('NDJSON 回放',true); $('status').textContent='本地回放';
-  playbackTimer=setInterval(()=>{if(i>=frames.length){clearInterval(playbackTimer);$('status').textContent='回放完成';return}handle(frames[i++])},1000/streamFps);
+  setConnection('NDJSON Playback',true); $('status').textContent='Local Playback';
+  playbackTimer=setInterval(()=>{if(i>=frames.length){clearInterval(playbackTimer);$('status').textContent='Playback Complete';return}handle(frames[i++])},1000/streamFps);
 };
