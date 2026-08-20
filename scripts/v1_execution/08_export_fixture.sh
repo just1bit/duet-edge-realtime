@@ -11,4 +11,5 @@ run_stage 08 export-fixture "${next_action}" \
   "${PYTHON_BIN}" "${ACCEPTANCE_SCRIPT_DIR}/lib/export_fixture.py" \
   --checkpoint "${EDGE_CHECKPOINT}" --duet-edge-root "${DUET_EDGE_ROOT}" \
   --motion "${RUN_ROOT}/input_motion.pkl" --root-scaled false \
-  --output "${RUN_ROOT}/real_fixture.npz"
+  --output "${RUN_ROOT}/real_fixture.npz" \
+  --golden-output "${RUN_ROOT}/real_golden_corpus.npz"

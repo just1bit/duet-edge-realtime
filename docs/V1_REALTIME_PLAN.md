@@ -207,7 +207,9 @@ end_to_end_latency_ms
 window_id
 commit_start_frame_id / commit_end_frame_id / commit_kind
 flags
-joints[24][3]
+lead_joints[24][3]
+companion_joints[24][3]
+joints[24][3] (compatibility alias of companion_joints)
 ```
 
 `seq`, `motion_time_s`, and `wall_time_s` remain compatibility fields for the Viewer and analysis tools. [PROTOCOL.md](PROTOCOL.md) defines complete messages and examples.
@@ -294,6 +296,8 @@ Metrics use bounded samples so memory remains stable during long sessions. The a
 - Continuity alignment, rotation blending, forward kinematics, and finite values;
 - Continuous timeline commits and interval validation;
 - V2 hello/frame/state/EOS/error protocol and lifecycle;
+- Dual lead/companion frame payloads and the companion compatibility alias;
+- Fake fixture Z-up orientation and articulated (non-root-only) motion;
 - Continue/fail deadline policies;
 - Viewer latest-frame-wins behavior and control-state retention;
 - Long-run metrics, queue, and memory bounds;
@@ -319,5 +323,5 @@ V1 is complete when:
 1. The realtime repository installs independently and the local fake path passes.
 2. The laboratory workstation starts the GPU backend from configured model, checkpoint, and input paths.
 3. Versioned contracts cover input, windows, commits, and output; effective configuration and summaries capture lifecycle, backpressure, deadlines, and playout behavior.
-4. Automated tests, realtime visualization, NDJSON replay, and structured acceptance pass.
+4. Automated tests, two-skeleton realtime visualization, NDJSON replay, and structured acceptance pass; visual review confirms Z-up posture and articulated motion.
 5. Continuous-window, performance, quality, and final-duration evidence is archived and reproducible.

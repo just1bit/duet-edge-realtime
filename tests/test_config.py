@@ -9,6 +9,9 @@ from duet_edge_realtime.config import ModelConfig, RealtimeConfig, StreamConfig
 class ConfigTests(unittest.TestCase):
     def test_v1_constraints(self):
         RealtimeConfig()
+        self.assertEqual(RealtimeConfig(backend="recorded").backend, "recorded")
+        with self.assertRaises(ValueError):
+            RealtimeConfig(backend="unknown")
         for kwargs in (
             {"window_frames":149}, {"hop_frames":74},
             {"inference_queue_size":0}, {"output_queue_size":0},

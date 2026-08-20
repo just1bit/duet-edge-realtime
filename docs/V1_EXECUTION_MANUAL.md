@@ -199,7 +199,7 @@ The validator confirms the CUDA backend, checkpoint evidence, inference samples,
 bash scripts/v1_execution/08_export_fixture.sh
 ```
 
-The output `${RUN_ROOT}/real_fixture.npz` contains normalized lead motion, generated motion, lead and generated joints, and model metadata. Later stages reuse this compact fixture.
+The output `${RUN_ROOT}/real_fixture.npz` contains normalized lead motion, generated motion, lead and generated joints, and model metadata. Later stages reuse this compact fixture. Stage 08 also exports and locally verifies `${RUN_ROOT}/real_golden_corpus.npz`, containing two consecutive CUDA windows for later replay with `configs/v1.recorded.json`; before leaving the laboratory, confirm the terminal prints `Golden corpus verified: 2 consecutive windows` and retain the complete `RUN_ROOT`.
 
 ## 12. Stage 09 — Viewer Review
 
@@ -217,13 +217,15 @@ bash scripts/v1_execution/09_viewer_web.sh
 
 Open the printed HTTP address and connect to the WebSocket endpoint from `configs/v1.fake.json`. Review:
 
-1. Continuous live animation;
-2. State transitions through buffering, playing, tail commit, and completion;
-3. Reconnection and state recovery;
-4. Fake NDJSON replay;
-5. Real NDJSON replay for orientation, drift, flips, ground axis, naturalness, and window boundaries.
+1. Two simultaneously visible, labelled skeletons: blue lead and cyan companion;
+2. Both skeletons are upright in the default Z-up view rather than lying on the ground;
+3. Limbs change relative to each root continuously; root translation alone or a frozen pose is a failure;
+4. State transitions through buffering, playing, tail commit, and completion;
+5. Reconnection and state recovery;
+6. Fake NDJSON replay;
+7. Real NDJSON replay for orientation, drift, flips, ground axis, naturalness, and window boundaries.
 
-Record useful visual judgments or screenshot/timestamp references under `Viewer Review` in `acceptance-notes.md`. The GPU profile includes real NDJSON review. The service and web-server logs are archived automatically; stopping the web server with Ctrl-C is an accepted completion.
+Record an explicit pass/fail for every item plus screenshot/timestamp references under `Viewer Review` in `acceptance-notes.md`. Stage-script evidence and this visual judgment are separate acceptance inputs. The GPU profile includes real NDJSON review. The service and web-server logs are archived automatically; stopping the web server with Ctrl-C is an accepted completion.
 
 ## 13. Stage 10 — 50-Step Baseline
 

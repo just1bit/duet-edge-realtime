@@ -80,6 +80,7 @@ class CommittedBatch:
     window_id: int
     start_frame_id: int
     joints: np.ndarray
+    lead_joints: np.ndarray | None = None
     commit_kind: str = "stable"
     trigger_monotonic_s: float | None = None
     schema_version: str = SCHEMA_VERSION
@@ -90,11 +91,19 @@ class CommittedBatch:
             raise ValueError(f"committed joints must be [N,24,3], got {joints.shape}")
         if not np.isfinite(joints).all():
             raise ValueError("committed joints contain NaN/Inf")
+        lead_joints = joints if self.lead_joints is None else np.asarray(self.lead_joints, dtype=np.float32)
+        if lead_joints.shape != joints.shape:
+            raise ValueError(
+                f"lead joints must match committed joints {joints.shape}, got {lead_joints.shape}"
+            )
+        if not np.isfinite(lead_joints).all():
+            raise ValueError("lead joints contain NaN/Inf")
         if self.start_frame_id < 0:
             raise ValueError("start_frame_id must be non-negative")
         if self.commit_kind not in {"stable", "tail"}:
             raise ValueError("commit_kind must be stable or tail")
         object.__setattr__(self, "joints", joints)
+        object.__setattr__(self, "lead_joints", lead_joints)
 
     @property
     def end_frame_id(self) -> int:

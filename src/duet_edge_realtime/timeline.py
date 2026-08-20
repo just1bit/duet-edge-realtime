@@ -25,6 +25,7 @@ class TimelineCommitter:
         start_frame_id: int,
         joints: np.ndarray,
         *,
+        lead_joints: np.ndarray | None = None,
         commit_kind: str = "stable",
         trigger_monotonic_s: float | None = None,
     ) -> CommittedBatch:
@@ -36,6 +37,7 @@ class TimelineCommitter:
             window_id=window_id,
             start_frame_id=start_frame_id,
             joints=joints,
+            lead_joints=lead_joints,
             commit_kind=commit_kind,
             trigger_monotonic_s=trigger_monotonic_s,
         )

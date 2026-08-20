@@ -38,7 +38,11 @@ def main() -> None:
     expect(all(item.get("frame_id") == item.get("seq") for item in frames), "Align frame_id with seq.")
     expect(all(item.get("schema_version") == "2.0.0" for item in frames), "Use frame schema 2.0.0.")
     expect(all(len(item.get("joints", [])) == 24 for item in frames), "Produce 24 joints per frame.")
+    expect(all(len(item.get("lead_joints", [])) == 24 for item in frames), "Produce 24 lead joints per frame.")
+    expect(all(len(item.get("companion_joints", [])) == 24 for item in frames), "Produce 24 companion joints per frame.")
+    expect(all(item.get("joints") == item.get("companion_joints") for item in frames), "Keep joints as the companion_joints compatibility alias.")
     expect(all(all(math.isfinite(value) for joint in item["joints"] for value in joint) for item in frames), "Produce finite joint coordinates.")
+    expect(all(all(math.isfinite(value) for joint in item.get("lead_joints", []) for value in joint) for item in frames), "Produce finite lead joint coordinates.")
     expect(summary["output"]["frames"] == len(frames), "Align summary and NDJSON frame counts.")
     expect(summary["input"]["frames"] == len(frames), "Align input and output frame counts.")
     expect(summary["output"].get("committed_frames") == len(frames), "Commit every recorded frame.")
@@ -100,4 +104,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

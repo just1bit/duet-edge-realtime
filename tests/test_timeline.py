@@ -21,6 +21,15 @@ class TimelineCommitterTests(unittest.TestCase):
             with self.subTest(start=start), self.assertRaises(TimelineCommitError):
                 timeline.commit(1, start, np.zeros((1,24,3), dtype=np.float32))
 
+    def test_lead_and_companion_lengths_must_match(self):
+        timeline = TimelineCommitter()
+        with self.assertRaisesRegex(ValueError, "lead joints must match"):
+            timeline.commit(
+                0, 0,
+                np.zeros((75,24,3), dtype=np.float32),
+                lead_joints=np.zeros((74,24,3), dtype=np.float32),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
