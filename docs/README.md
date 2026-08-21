@@ -47,7 +47,7 @@ Path precedence is:
 
 ```bash
 # Terminal 1
-python -m duet_edge_realtime.service \
+python3 -m duet_edge_realtime.service \
   --config configs/v1.fake.json \
   --clock realtime \
   --sink websocket,ndjson
@@ -68,7 +68,7 @@ export EDGE_CHECKPOINT=/data/user/train-1800.pt
 export EDGE_INPUT_MOTION=/data/user/aist_plusplus_final/motions/example.pkl
 export EDGE_OUTPUT_DIR=/data/user/realtime-runs
 
-python -m duet_edge_realtime.service \
+python3 -m duet_edge_realtime.service \
   --config configs/v1.cuda.json \
   --root-scaled false \
   --clock virtual \

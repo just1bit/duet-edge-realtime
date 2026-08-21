@@ -49,21 +49,21 @@ Create and activate the environment:
 cd PROJECT_ROOT/duet-edge-realtime
 python3.10 -m venv .venv
 source .venv/bin/activate
-python -m pip install -U pip
+python3 -m pip install -U pip
 ```
 
 For Local acceptance, install the local environment:
 
 ```bash
-python -m pip install -e '.[local]'
+python3 -m pip install -e '.[local]'
 ```
 
 For GPU acceptance, ensure `g++` is available, then install CUDA 12.8 torch, PyTorch3D in order:
 
 ```bash
-python -m pip install 'torch==2.7.0' --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -e '.[gpu]'
-python -m pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
+python3 -m pip install 'torch==2.7.0' --index-url https://download.pytorch.org/whl/cu128
+python3 -m pip install -e '.[gpu]'
+python3 -m pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
 ```
 
 Reactivate `.venv` in each new environment. Follow the workflow issue instructions to back to this section for fixing.
