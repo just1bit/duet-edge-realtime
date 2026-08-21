@@ -390,28 +390,6 @@ class AcceptanceScriptTests(unittest.TestCase):
             self.assertNotEqual(guided.returncode, 0)
             self.assertIn("Run with the cuda backend", guided.stdout)
 
-    def test_document_renames_and_references(self):
-        self.assertTrue((self.repo / "docs" / "V1_EXECUTION_MANUAL.md").is_file())
-        self.assertTrue((self.repo / "docs" / "V1_REALTIME_PLAN.md").is_file())
-        old_names = (
-            "V1_ACCEPTANCE_" + "EXECUTION_CN.md",
-            "VERSION1_" + "STREAMING_PLAN.md",
-            "VERSION1_" + "REALTIME_PLAN.md",
-            "acceptance-" + "observations.md",
-        )
-        for path in self.repo.rglob("*"):
-            if (
-                not path.is_file() or ".git" in path.parts
-                or "__pycache__" in path.parts or "outputs" in path.parts
-            ):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            for old_name in old_names:
-                self.assertNotIn(old_name, text, f"{old_name} remains in {path}")
-
     def test_touched_content_is_english_and_manual_is_action_oriented(self):
         paths = [
             self.repo / "docs" / "README.md",

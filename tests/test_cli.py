@@ -64,6 +64,11 @@ class CliTests(unittest.TestCase):
                 },
             }))
             env = {**os.environ, "PYTHONPATH": str(repo / "src")}
+            # Acceptance exports the real CUDA paths.  This test must exercise
+            # the deliberately missing paths in its JSON config instead of
+            # inheriting those higher-precedence overrides.
+            env.pop("DUET_EDGE_ROOT", None)
+            env.pop("EDGE_CHECKPOINT", None)
             command = [
                 sys.executable, "-m", "duet_edge_realtime.service",
                 "--config", str(config), "--input-format", "fixture",
