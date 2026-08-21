@@ -146,11 +146,13 @@ first_frame_latency
 Steady-state compute and buffer budgets are:
 
 ```text
-inference_p99_ms + safety_margin_ms < hop_frames / fps * 1000
-playout_delay_s * 1000 >= inference_p99_ms + safety_margin_ms
+recommended_inference_slo_ms
+  = ceil(measured_max_ms + inference_reserve_ms)
+recommended_inference_slo_ms + safety_margin_ms < hop_frames / fps * 1000
+playout_delay_s * 1000 >= recommended_inference_slo_ms + safety_margin_ms
 ```
 
-`stream.safety_margin_ms` starts at 100 ms and is calibrated from measured GPU variation, workload, and acceptance evidence. The playout module schedules against absolute deadlines and records jitter, underflow, and end-to-end latency. Inference wall latency includes sampling, CUDA synchronization, and transfer of the generated window to CPU, ending when continuity processing can begin.
+GPU benchmarks use the realtime 75-frame cadence. Recommendations add 10 ms above the measured maximum, then add `safety_margin_ms` for playout. Model warmup is reported separately from frame latency.
 
 ## 5. Backpressure, Overload, and Channels
 

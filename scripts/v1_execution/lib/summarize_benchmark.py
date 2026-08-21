@@ -14,13 +14,18 @@ def main() -> None:
     parser.add_argument("--output", default="evidence/benchmarks/benchmark.json")
     parser.add_argument("--min-samples", type=int, default=100)
     parser.add_argument("--steps", type=int)
+    parser.add_argument("--inference-reserve-ms", type=float, default=10.0)
     args = parser.parse_args()
+    if args.inference_reserve_ms < 0 or not math.isfinite(args.inference_reserve_ms):
+        parser.error("--inference-reserve-ms must be finite and non-negative")
     root = Path(args.root)
     rows_by_steps: dict[int, tuple[int, dict]] = {}
     for path in sorted(root.glob(args.pattern)):
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("exit_reason") != "input_complete":
             raise SystemExit(f"Complete the benchmark input, then repeat: {path}")
+        if data.get("clock") != "realtime":
+            raise SystemExit(f"Run this benchmark with the realtime clock: {path}")
         backend = data.get("backend", {})
         if backend.get("backend") != "cuda":
             raise SystemExit(f"Run this benchmark with the CUDA backend: {path}")
@@ -36,19 +41,25 @@ def main() -> None:
         hop_ms = stream["hop_frames"] / stream["fps"] * 1000
         margin = stream["safety_margin_ms"]
         p99 = data["inference"]["p99_ms"]
-        delay = math.ceil(p99 + margin) / 1000.0
+        wall_samples = data["inference"]["wall_ms"]
+        measured_max = max(wall_samples)
+        inference_slo = math.ceil(measured_max + args.inference_reserve_ms)
+        delay = math.ceil(inference_slo + margin) / 1000.0
         row = {
             "steps": steps,
             "p50_ms": data["inference"]["p50_ms"],
             "p95_ms": data["inference"]["p95_ms"],
             "p99_ms": p99,
+            "measured_max_ms": measured_max,
             "cuda_p50_ms": data["inference"].get("cuda_p50_ms"),
             "cuda_p95_ms": data["inference"].get("cuda_p95_ms"),
             "cuda_p99_ms": data["inference"].get("cuda_p99_ms"),
             "sample_count": samples,
             "peak_gpu_memory_bytes": backend.get("peak_gpu_memory_bytes"),
             "checkpoint_sha256": backend.get("checkpoint_sha256"),
-            "deadline_candidate": p99 + margin < hop_ms,
+            "deadline_candidate": inference_slo + margin < hop_ms,
+            "inference_reserve_ms": args.inference_reserve_ms,
+            "recommended_inference_slo_ms": float(inference_slo),
             "safety_margin_ms": margin,
             "hop_period_ms": hop_ms,
             "recommended_playout_delay_s": delay if delay * 1000 < hop_ms else None,
@@ -63,8 +74,9 @@ def main() -> None:
         raise SystemExit(f"Create benchmark summaries matching {args.pattern}.")
     passing = [row for row in rows if row["deadline_candidate"]]
     result = {
+        "schema_version": "2.0",
         "decision": "baseline_pass" if any(row["steps"] == 50 for row in passing) else "candidate_review",
-        "rule": "p99_ms + safety_margin_ms < hop_period_ms",
+        "rule": "recommended_inference_slo_ms + safety_margin_ms < hop_period_ms",
         "recommended_candidate": max(passing, key=lambda row: row["steps"]) if passing else None,
         "candidates": rows,
     }

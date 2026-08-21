@@ -184,6 +184,26 @@ class ProtocolTests(unittest.TestCase):
             differences = np.diff([x["motion_time_s"] for x in frames])
             np.testing.assert_allclose(differences, 1/30, atol=1e-12)
 
+    def test_session_latency_excludes_time_before_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            np.savez(root / "fixture.npz", motion_151=identity_motion(150))
+            clock = VirtualClock()
+            service = StreamingService(
+                RealtimeConfig(), FakeInferenceBackend(),
+                NormalizedFixtureAdapter(root / "fixture.npz"),
+                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+                clock, root / "summary.json",
+            )
+            clock.value = 4.0  # Simulate model loading after service construction.
+            asyncio.run(service.run())
+            summary = json.loads((root / "summary.json").read_text())
+            self.assertEqual(summary["clock"], "virtual")
+            expected_ms = (149 / 30 + service.config.playout_delay_s) * 1000
+            self.assertAlmostEqual(
+                summary["output"]["end_to_end_latency_p95_ms"], expected_ms
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

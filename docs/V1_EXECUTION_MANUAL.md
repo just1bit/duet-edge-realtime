@@ -239,9 +239,14 @@ bash scripts/v1_execution/10_summarize_baseline.sh
 Review `${RUN_ROOT}/evidence/benchmarks/benchmark.json`. The automatic summary calculates:
 
 ```text
-p99_ms + safety_margin_ms < hop_period_ms
-recommended_playout_delay_s >= (p99_ms + safety_margin_ms) / 1000
+recommended_inference_slo_ms
+  = ceil(measured_max_ms + inference_reserve_ms)
+recommended_inference_slo_ms + safety_margin_ms < hop_period_ms
+recommended_playout_delay_s
+  >= (recommended_inference_slo_ms + safety_margin_ms) / 1000
 ```
+
+The 10 ms inference reserve covers cross-run variation. `safety_margin_ms` separately protects playout.
 
 When useful, record the baseline or candidate decision and evidence paths under `Performance` in `acceptance-notes.md`.
 

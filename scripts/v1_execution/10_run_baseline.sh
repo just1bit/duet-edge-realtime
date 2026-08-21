@@ -17,4 +17,4 @@ run_stage 10 run-baseline "${next_action}" \
   "${PYTHON_BIN}" -m duet_edge_realtime.service --config configs/v1.cuda.json \
   --duet-edge-root "${DUET_EDGE_ROOT}" --checkpoint "${EDGE_CHECKPOINT}" \
   --input "${RUN_ROOT}/real_fixture.npz" --input-format fixture --output-dir "${RUN_ROOT}" \
-  --loop "${BASELINE_LOOPS}" --clock virtual --sink ndjson --run-id "${run_id}"
+  --loop "${BASELINE_LOOPS}" --clock realtime --sink ndjson --run-id "${run_id}"

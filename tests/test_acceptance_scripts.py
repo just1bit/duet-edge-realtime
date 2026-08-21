@@ -277,6 +277,7 @@ class AcceptanceScriptTests(unittest.TestCase):
             run.mkdir()
             summary = {
                 "exit_reason": "input_complete",
+                "clock": "realtime",
                 "backend": {
                     "backend": "cuda", "sampling_steps": 50,
                     "checkpoint_sha256": "deadbeef", "peak_gpu_memory_bytes": 123,
@@ -289,6 +290,7 @@ class AcceptanceScriptTests(unittest.TestCase):
                     "sample_count": 100, "p50_ms": 1000.0, "p95_ms": 1100.0,
                     "p99_ms": 1200.0, "cuda_p50_ms": 900.0,
                     "cuda_p95_ms": 1000.0, "cuda_p99_ms": 1100.0,
+                    "wall_ms": [1000.0] * 99 + [1225.0],
                 },
             }
             (run / "summary.json").write_text(json.dumps(summary))
@@ -299,9 +301,21 @@ class AcceptanceScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads((root / "result.json").read_text())
             candidate = payload["recommended_candidate"]
+            self.assertEqual(payload["schema_version"], "2.0")
             self.assertEqual(candidate["steps"], 50)
             self.assertEqual(candidate["sample_count"], 100)
-            self.assertEqual(candidate["recommended_playout_delay_s"], 1.3)
+            self.assertEqual(candidate["measured_max_ms"], 1225.0)
+            self.assertEqual(candidate["recommended_inference_slo_ms"], 1235.0)
+            self.assertEqual(candidate["recommended_playout_delay_s"], 1.335)
+
+            summary["clock"] = "virtual"
+            (run / "summary.json").write_text(json.dumps(summary))
+            rejected = self.run_python(
+                "summarize_benchmark.py", root, "--pattern",
+                "benchmark-*/summary.json", "--output", "rejected.json",
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("realtime clock", rejected.stderr)
 
     def test_candidate_config_and_manual_config_validation(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -326,13 +340,23 @@ class AcceptanceScriptTests(unittest.TestCase):
             config["stream"]["inference_slo_ms"] = 1200
             candidate_config.write_text(json.dumps(config))
             benchmark = root / "benchmark.json"
-            benchmark.write_text(json.dumps({"candidates": [{
+            benchmark.write_text(json.dumps({"schema_version": "2.0", "candidates": [{
                 "steps": 25, "p99_ms": 1100, "deadline_candidate": True,
+                "measured_max_ms": 1180, "inference_reserve_ms": 20,
+                "recommended_inference_slo_ms": 1200,
                 "safety_margin_ms": 100, "recommended_playout_delay_s": 1.3,
                 "summary": "summary.json",
             }]}))
             quality = root / "quality.json"
             quality.write_text(json.dumps({"passed": True}))
+            old_benchmark = root / "old-benchmark.json"
+            old_benchmark.write_text(json.dumps({"candidates": []}))
+            rejected = self.run_python(
+                "config_recommendation.py", "--benchmark", old_benchmark,
+                "--steps", "25",
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("version 2", rejected.stderr)
             validated = self.run_python(
                 "config_recommendation.py", "--benchmark", benchmark,
                 "--config", candidate_config, "--quality", quality, "--validate",

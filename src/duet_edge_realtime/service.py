@@ -58,7 +58,8 @@ class StreamingService:
         self.run_id = run_id or str(uuid.uuid4())
         self.session_id = self.run_id
         self.stream_id = f"{self.run_id}:companion-motion"
-        self.metrics = RunMetrics(self.run_id)
+        clock_mode = "virtual" if isinstance(clock, VirtualClock) else "realtime"
+        self.metrics = RunMetrics(self.run_id, clock=clock_mode)
         self.lifecycle = Lifecycle()
         self._input_complete = asyncio.Event()
         self._source_time_by_seq: dict[int, float] = {}
@@ -141,6 +142,9 @@ class StreamingService:
         }
 
     async def run(self) -> None:
+        # Model warmup is reported separately from session latency.
+        self._start_clock = self.clock.now()
+        self.metrics.started_wall_s = time.time()
         sink_ready = False
         try:
             await self.sink.start(self.hello())

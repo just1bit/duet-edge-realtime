@@ -24,6 +24,7 @@ def percentile(values: list[float], fraction: float) -> float | None:
 @dataclass
 class RunMetrics:
     run_id: str
+    clock: str = "unspecified"
     started_wall_s: float = field(default_factory=time.time)
     input_frames: int = 0
     output_frames: int = 0
@@ -144,6 +145,7 @@ class RunMetrics:
         end_to_end_p95_ms = percentile(self.end_to_end_latency_ms, 0.95)
         return {
             "run_id": self.run_id,
+            "clock": self.clock,
             "exit_reason": self.exit_reason,
             "started_wall_s": self.started_wall_s,
             "finished_wall_s": time.time(),

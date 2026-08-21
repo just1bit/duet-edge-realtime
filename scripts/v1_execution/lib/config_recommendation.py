@@ -17,16 +17,22 @@ def select_candidate(benchmark: dict, steps: int) -> dict:
 
 
 def recommendation(candidate: dict) -> dict:
-    delay = candidate.get("recommended_playout_delay_s")
-    margin = candidate.get("safety_margin_ms")
-    if not isinstance(delay, (int, float)) or not math.isfinite(delay):
-        raise ValueError("Choose a candidate with a recommended playout delay.")
+    required = (
+        "p99_ms", "measured_max_ms", "inference_reserve_ms",
+        "safety_margin_ms", "recommended_inference_slo_ms",
+        "recommended_playout_delay_s",
+    )
+    values = {name: candidate.get(name) for name in required}
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values.values()):
+        raise ValueError("Generate a complete realtime benchmark recommendation.")
     return {
         "sampling_steps": candidate["steps"],
-        "measured_p99_ms": candidate["p99_ms"],
-        "safety_margin_ms": margin,
-        "playout_delay_s": delay,
-        "inference_slo_ms": delay * 1000 - margin,
+        "measured_p99_ms": values["p99_ms"],
+        "measured_max_ms": values["measured_max_ms"],
+        "inference_reserve_ms": values["inference_reserve_ms"],
+        "safety_margin_ms": values["safety_margin_ms"],
+        "playout_delay_s": values["recommended_playout_delay_s"],
+        "inference_slo_ms": values["recommended_inference_slo_ms"],
         "summary": candidate["summary"],
     }
 
@@ -40,6 +46,8 @@ def main() -> None:
     parser.add_argument("--validate", action="store_true")
     args = parser.parse_args()
     benchmark = json.loads(Path(args.benchmark).read_text(encoding="utf-8"))
+    if benchmark.get("schema_version") != "2.0":
+        raise ValueError("Generate a version 2 realtime benchmark summary.")
     if args.config:
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         steps = config["model"]["sampling_steps"]
@@ -68,7 +76,7 @@ def main() -> None:
         if stream["playout_delay_s"] != suggested["playout_delay_s"]:
             actions.append("Set playout_delay_s to the reviewed recommendation.")
         if stream["inference_slo_ms"] != suggested["inference_slo_ms"]:
-            actions.append("Set inference_slo_ms to playout delay minus safety margin.")
+            actions.append("Set inference_slo_ms to the reviewed recommendation.")
         payload["passed"] = not actions
         payload["actions"] = actions
         print(json.dumps(payload, indent=2))
@@ -78,4 +86,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
