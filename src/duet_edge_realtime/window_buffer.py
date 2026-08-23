@@ -16,7 +16,7 @@ class SlidingWindowBuffer:
 
     def __init__(self, window_frames: int = 150, hop_frames: int = 75, seed: int = 0):
         if window_frames != 150 or hop_frames != 75:
-            raise ValueError("V1 requires a 150/75 window/hop")
+            raise ValueError("V2 requires a 150/75 window/hop")
         self.window_frames = window_frames
         self.hop_frames = hop_frames
         self.seed = seed
@@ -52,7 +52,7 @@ class SlidingWindowBuffer:
             return None
         if self._last_seq < self.window_frames - 1:
             raise SequenceError(
-                f"V1 needs at least 150 input frames, received {self._last_seq + 1}"
+                f"V2 needs at least 150 input frames, received {self._last_seq + 1}"
             )
         since_last_trigger = self._last_seq - (self._next_trigger_seq - self.hop_frames)
         if since_last_trigger == 0:

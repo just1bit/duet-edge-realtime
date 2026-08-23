@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 
 
-PROTOCOL_NAME = "duet-edge-stream/v2"
-SCHEMA_VERSION = "2.0.0"
+PROTOCOL_NAME = "duet-edge-stream/v3"
+SCHEMA_VERSION = "3.0.0"
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,11 @@ class MotionFrame:
     source_id: str = "lead-motion"
     schema_version: str = SCHEMA_VERSION
     ingest_monotonic_s: float | None = None
+    clip_id: str | None = None
+    clip_frame: int | None = None
+    source_sha256: str | None = None
+    transition_id: int | None = None
+    in_transition: bool = False
 
     def __post_init__(self) -> None:
         if self.seq < 0:
@@ -63,6 +68,11 @@ class GeneratedChunk:
     motion: np.ndarray
     inference_wall_ms: float = 0.0
     inference_cuda_ms: float | None = None
+    handoff_used: bool = False
+    handoff_produced: bool = False
+    handoff_state_bytes: int = 0
+    handoff_copy_ms: float = 0.0
+    normalized_overlap_disagreement: float | None = None
 
     def __post_init__(self) -> None:
         motion = np.asarray(self.motion, dtype=np.float32)

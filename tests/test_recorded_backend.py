@@ -9,16 +9,25 @@ from pathlib import Path
 import numpy as np
 
 from duet_edge_realtime.backends.recorded import GOLDEN_SCHEMA, RecordedInferenceBackend
-from duet_edge_realtime.continuity import IdentityNormalizer, OnlineContinuityProcessor
+from duet_edge_realtime.continuity import (
+    IdentityNormalizer, OnlineContinuityProcessor, direct_fk,
+)
 from duet_edge_realtime.schemas import MotionWindow
 
 from helpers import identity_motion
 
 
-def process_windows(chunks: np.ndarray) -> np.ndarray:
+def process_windows(chunks: np.ndarray, leads: np.ndarray | None = None) -> np.ndarray:
     processor = OnlineContinuityProcessor(IdentityNormalizer())
-    values = [processor.process(chunk) for chunk in chunks]
-    values.append(processor.flush())
+    if leads is None:
+        values = [processor.process(chunk) for chunk in chunks]
+        values.append(processor.flush())
+    else:
+        values = [
+            processor.process(chunk, lead_motion=lead)
+            for chunk, lead in zip(chunks, leads)
+        ]
+        values.append(processor.flush_with_lead(leads[-1]))
     return np.concatenate(values)
 
 
@@ -28,8 +37,11 @@ def make_golden_fixture(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]
     generated = lead_windows.copy()
     generated[0, :, 5] += 0.10
     generated[1, :, 5] += 0.20
-    lead_joints = process_windows(lead_windows)
-    companion_joints = process_windows(generated)
+    lead_joints = np.concatenate([
+        direct_fk(IdentityNormalizer(), lead_windows[0])[:75],
+        direct_fk(IdentityNormalizer(), lead_windows[1]),
+    ])
+    companion_joints = process_windows(generated, lead_windows)
     np.savez_compressed(
         path,
         golden_schema=GOLDEN_SCHEMA,

@@ -7,7 +7,7 @@ from duet_edge_realtime.config import ModelConfig, RealtimeConfig, StreamConfig
 
 
 class ConfigTests(unittest.TestCase):
-    def test_v1_constraints(self):
+    def test_v2_constraints(self):
         RealtimeConfig()
         self.assertEqual(RealtimeConfig(backend="recorded").backend, "recorded")
         with self.assertRaises(ValueError):
@@ -24,7 +24,7 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(sampling_steps=0)
         with self.assertRaises(ValueError):
-            StreamConfig(playout_delay_s=1.5)
+            StreamConfig(playout_delay_s=0.5)
 
     def test_nested_json_round_trip(self):
         data = {

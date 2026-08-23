@@ -46,3 +46,6 @@ class FakeInferenceBackend(InferenceBackend):
 
     def version_info(self) -> dict:
         return {"backend": "fake", "delay_s": self.delay_s}
+
+    def start_session(self, session_id: str) -> None:
+        self.calls = 0

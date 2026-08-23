@@ -12,7 +12,7 @@ import numpy as np
 
 from duet_edge_realtime.backends.duet_edge import CudaDuetEdgeBackend
 from duet_edge_realtime.backends.recorded import GOLDEN_SCHEMA, RecordedInferenceBackend
-from duet_edge_realtime.continuity import OnlineContinuityProcessor
+from duet_edge_realtime.continuity import OnlineContinuityProcessor, direct_fk
 from duet_edge_realtime.input_adapters import AISTFileReplayAdapter
 from duet_edge_realtime.schemas import MotionWindow
 
@@ -31,9 +31,18 @@ def repository_state(path: Path) -> dict:
     }
 
 
-def process_windows(processor, chunks: np.ndarray) -> np.ndarray:
-    committed = [processor.process(chunk) for chunk in chunks]
-    committed.append(processor.flush())
+def process_windows(processor, chunks: np.ndarray, lead_chunks: np.ndarray) -> np.ndarray:
+    committed = [
+        processor.process(chunk, lead_motion=lead)
+        for chunk, lead in zip(chunks, lead_chunks)
+    ]
+    committed.append(processor.flush_with_lead(lead_chunks[-1]))
+    return np.concatenate(committed)
+
+
+def direct_lead_timeline(backend, lead_chunks: np.ndarray) -> np.ndarray:
+    committed = [direct_fk(backend, chunk)[:75] for chunk in lead_chunks]
+    committed.append(direct_fk(backend, lead_chunks[-1])[75:])
     return np.concatenate(committed)
 
 
@@ -64,6 +73,7 @@ def main() -> None:
         eta=args.eta,
     )
     backend.warmup()
+    backend.start_session("fixture-export")
     try:
         adapter = AISTFileReplayAdapter(
             args.motion,
@@ -99,8 +109,10 @@ def main() -> None:
         generated_unnormalized = np.stack(
             [backend.unnormalize(chunk[None])[0] for chunk in generated]
         )
-        generated_joints = process_windows(OnlineContinuityProcessor(backend), generated)
-        lead_joints = process_windows(OnlineContinuityProcessor(backend), lead_windows)
+        generated_joints = process_windows(
+            OnlineContinuityProcessor(backend), generated, lead_windows
+        )
+        lead_joints = direct_lead_timeline(backend, lead_windows)
 
         scaler = backend.edge.normalizer.scaler
         scale = scaler.scale_.detach().cpu().numpy().astype(np.float32)
@@ -122,11 +134,9 @@ def main() -> None:
         }
 
         legacy_generated_joints = process_windows(
-            OnlineContinuityProcessor(backend), generated[:1]
+            OnlineContinuityProcessor(backend), generated[:1], lead_windows[:1]
         )
-        legacy_lead_joints = process_windows(
-            OnlineContinuityProcessor(backend), lead_windows[:1]
-        )
+        legacy_lead_joints = direct_lead_timeline(backend, lead_windows[:1])
 
         legacy_target = Path(args.output)
         legacy_target.parent.mkdir(parents=True, exist_ok=True)
@@ -173,11 +183,9 @@ def main() -> None:
         try:
             replay_chunks = np.stack([replay.infer(window).motion for window in windows])
             replay_generated_joints = process_windows(
-                OnlineContinuityProcessor(replay), replay_chunks
+                OnlineContinuityProcessor(replay), replay_chunks, lead_windows
             )
-            replay_lead_joints = process_windows(
-                OnlineContinuityProcessor(replay), lead_windows
-            )
+            replay_lead_joints = direct_lead_timeline(replay, lead_windows)
             np.testing.assert_allclose(replay_chunks, generated, atol=1e-6, rtol=0)
             np.testing.assert_allclose(
                 replay_generated_joints, generated_joints, atol=1e-5, rtol=1e-5

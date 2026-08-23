@@ -12,6 +12,38 @@ class PathsConfig:
     input_motion: str = ""
     output_dir: str = ""
     root_scaled: bool | None = None
+    checkpoint_sha256: str = ""
+    input_sha256: str = ""
+
+
+@dataclass(frozen=True)
+class InputConfig:
+    timeline_id: str = ""
+    start_frame: int = 0
+    end_frame: int | None = None
+    transition_frames: int = 30
+
+    def __post_init__(self) -> None:
+        if self.start_frame < 0:
+            raise ValueError("input.start_frame must be non-negative")
+        if self.end_frame is not None and self.end_frame <= self.start_frame:
+            raise ValueError("input.end_frame must be greater than start_frame")
+        if self.transition_frames < 0:
+            raise ValueError("input.transition_frames must be non-negative")
+
+
+@dataclass(frozen=True)
+class ContinuityConfig:
+    causal_overlap: bool = True
+    relative_root_correction: bool = True
+    robust_filter_z: float = 6.0
+    diagnostic_sample_limit: int = 32
+
+    def __post_init__(self) -> None:
+        if self.robust_filter_z <= 0:
+            raise ValueError("continuity.robust_filter_z must be positive")
+        if self.diagnostic_sample_limit < 1:
+            raise ValueError("continuity.diagnostic_sample_limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -34,21 +66,21 @@ class StreamConfig:
     fps: int = 30
     window_frames: int = 150
     hop_frames: int = 75
-    playout_delay_s: float = 2.0
+    playout_delay_s: float = 0.75
     inference_queue_size: int = 1
     output_queue_size: int = 2
     viewer_queue_frames: int = 150
     inference_queue_policy: str = "block"
-    inference_slo_ms: float = 1900.0
-    safety_margin_ms: float = 100.0
+    inference_slo_ms: float = 650.0
+    safety_margin_ms: float = 50.0
     deadline_miss_policy: str = "continue"
-    jitter_slo_ms: float = 20.0
+    jitter_slo_ms: float = 10.0
 
     def __post_init__(self) -> None:
         if self.fps <= 0:
             raise ValueError("stream.fps must be positive")
         if self.window_frames != 150 or self.hop_frames != 75:
-            raise ValueError("V1 requires stream.window_frames=150 and hop_frames=75")
+            raise ValueError("V2 requires stream.window_frames=150 and hop_frames=75")
         if self.playout_delay_s < 0:
             raise ValueError("stream.playout_delay_s must be non-negative")
         if self.inference_queue_size < 1:
@@ -80,17 +112,28 @@ class StreamConfig:
 class ServerConfig:
     bind_host: str = "127.0.0.1"
     port: int = 8765
+    web_port: int = 8080
+    control_port: int = 8766
+    web_root: str = "web"
 
     def __post_init__(self) -> None:
         if not 1 <= self.port <= 65535:
             raise ValueError("server.port must be in [1, 65535]")
+        if not 1 <= self.web_port <= 65535:
+            raise ValueError("server.web_port must be in [1, 65535]")
+        if not 1 <= self.control_port <= 65535:
+            raise ValueError("server.control_port must be in [1, 65535]")
+        if len({self.port, self.web_port, self.control_port}) != 3:
+            raise ValueError("server port, web_port and control_port must differ")
 
 
 @dataclass(frozen=True)
 class RealtimeConfig:
     backend: str = "fake"
     paths: PathsConfig = field(default_factory=PathsConfig)
+    input: InputConfig = field(default_factory=InputConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    continuity: ContinuityConfig = field(default_factory=ContinuityConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
@@ -105,7 +148,9 @@ class RealtimeConfig:
         return cls(
             backend=data.get("backend", "fake"),
             paths=PathsConfig(**data.get("paths", {})),
+            input=InputConfig(**data.get("input", {})),
             model=ModelConfig(**data.get("model", {})),
+            continuity=ContinuityConfig(**data.get("continuity", {})),
             stream=StreamConfig(**data.get("stream", {})),
             server=ServerConfig(**data.get("server", {})),
         )
@@ -151,3 +196,7 @@ class RealtimeConfig:
     def bind_host(self): return self.server.bind_host
     @property
     def port(self): return self.server.port
+    @property
+    def web_port(self): return self.server.web_port
+    @property
+    def control_port(self): return self.server.control_port

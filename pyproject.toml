@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "duet-edge-realtime"
-version = "0.2.0"
-description = "V1 near-realtime streaming service for Duet-EDGE"
+version = "0.3.0"
+description = "V2 near-realtime causal-overlap streaming system for Duet-EDGE"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24,<2", "websockets>=12"]
 

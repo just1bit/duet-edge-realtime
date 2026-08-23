@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import resource
 import subprocess
 import time
 import uuid
@@ -17,12 +18,13 @@ from .backends.duet_edge import CudaDuetEdgeBackend
 from .backends.fake import FakeInferenceBackend
 from .backends.recorded import RecordedInferenceBackend
 from .config import RealtimeConfig
-from .continuity import OnlineContinuityProcessor
+from .continuity import OnlineContinuityProcessor, direct_fk
 from .input_adapters import AISTFileReplayAdapter, NormalizedFixtureAdapter
 from .lifecycle import Lifecycle, ServiceState
 from .metrics import RunMetrics
+from .motion_quality import OnlineMotionQuality
 from .playout import RealtimeClock, VirtualClock
-from .sinks import CompositeSink, NDJSONSink, WebSocketSink
+from .sinks import CompositeSink, NDJSONSink, StaticWebSink, WebSocketSink
 from .skeleton import JOINT_NAMES, PARENTS
 from .schemas import PROTOCOL_NAME, SCHEMA_VERSION
 from .timeline import TimelineCommitter
@@ -48,7 +50,10 @@ def realtime_repository_info() -> dict:
 
 
 class StreamingService:
-    def __init__(self, config, backend, source, sink, clock, summary_path, run_id=None):
+    def __init__(
+        self, config, backend, source, sink, clock, summary_path, run_id=None,
+        *, close_backend: bool = True,
+    ):
         self.config = config
         self.backend = backend
         self.source = source
@@ -63,6 +68,7 @@ class StreamingService:
         self.lifecycle = Lifecycle()
         self._input_complete = asyncio.Event()
         self._source_time_by_seq: dict[int, float] = {}
+        self._source_metadata_by_seq: dict[int, dict] = {}
         self._start_clock = clock.now()
         self._inference_queue: asyncio.Queue = asyncio.Queue(
             maxsize=config.inference_queue_size
@@ -71,8 +77,13 @@ class StreamingService:
             maxsize=config.output_queue_size
         )
         self._inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="duet-inference")
+        self.motion_quality = OnlineMotionQuality(config.fps)
+        self._last_transition_id = None
+        self.close_backend = close_backend
 
     def hello(self) -> dict:
+        source_metadata = getattr(self.source, "metadata", {}) if self.source else {}
+        continuity = self.backend.continuity_info()
         return {
             "type": "hello",
             "protocol": PROTOCOL_NAME,
@@ -80,6 +91,31 @@ class StreamingService:
             "run_id": self.run_id,
             "session_id": self.session_id,
             "stream_id": self.stream_id,
+            "backend": self.config.backend,
+            "backend_badge": self.config.backend.upper(),
+            "model_mode": "lead-only",
+            "checkpoint": (
+                Path(self.config.paths.checkpoint).name
+                if self.config.paths.checkpoint else None
+            ),
+            "checkpoint_sha256": self.config.paths.checkpoint_sha256 or None,
+            "guidance": {
+                "mode": "lead-only",
+                "music": self.config.guidance_music,
+                "lead": self.config.guidance_lead,
+            },
+            "sampling_steps": self.config.sampling_steps,
+            "continuity": continuity,
+            "source_timeline": {
+                "identity": self.config.input.timeline_id or source_metadata.get(
+                    "timeline_id", getattr(self.source, "identity", "lead-motion")
+                ),
+                "path": source_metadata.get("source", self.config.paths.input_motion),
+                "sha256": source_metadata.get("source_sha256"),
+                "start_frame": source_metadata.get("start_frame", self.config.input.start_frame),
+                "end_frame": source_metadata.get("end_frame", self.config.input.end_frame),
+                "clip_count": source_metadata.get("clip_count", 1),
+            },
             "fps": self.config.fps,
             "joint_count": 24,
             "joint_names": JOINT_NAMES,
@@ -146,9 +182,12 @@ class StreamingService:
         self._start_clock = self.clock.now()
         self.metrics.started_wall_s = time.time()
         sink_ready = False
+        resource_task = None
         try:
+            self.backend.start_session(self.session_id)
             await self.sink.start(self.hello())
             sink_ready = True
+            resource_task = asyncio.create_task(self._sample_resources())
             await self._publish_initial_state()
             await self._transition(ServiceState.BUFFERING)
             tasks = [
@@ -199,6 +238,10 @@ class StreamingService:
                 })
             raise
         finally:
+            if resource_task is not None:
+                resource_task.cancel()
+                await asyncio.gather(resource_task, return_exceptions=True)
+            self.metrics.motion_quality = self.motion_quality.summary()
             try:
                 backend_info = self.backend.version_info()
             except Exception as version_exc:
@@ -211,7 +254,43 @@ class StreamingService:
             )
             await self.sink.close()
             self._inference_executor.shutdown(wait=True, cancel_futures=True)
-            self.backend.close()
+            if self.close_backend:
+                self.backend.close()
+
+    async def _sample_resources(self) -> None:
+        interval_s = 0.1 if self.config.backend == "cuda" else 1.0
+        while True:
+            sample_started = time.monotonic()
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            sample = {
+                "wall_time_s": time.time(),
+                "monotonic_offset_s": self.clock.now() - self._start_clock,
+                "cpu_user_s": usage.ru_utime,
+                "cpu_system_s": usage.ru_stime,
+                "rss_kib": usage.ru_maxrss,
+                "gpu_utilization_percent": None,
+                "gpu_memory_used_mib": None,
+            }
+            if self.config.backend == "cuda":
+                process = None
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        "nvidia-smi",
+                        "--query-gpu=utilization.gpu,memory.used",
+                        "--format=csv,noheader,nounits",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    output, _ = await asyncio.wait_for(process.communicate(), 0.09)
+                    utilization, memory = output.decode().splitlines()[0].split(",")
+                    sample["gpu_utilization_percent"] = float(utilization.strip())
+                    sample["gpu_memory_used_mib"] = float(memory.strip())
+                except (FileNotFoundError, IndexError, ValueError, asyncio.TimeoutError):
+                    if process is not None and process.returncode is None:
+                        process.kill()
+                        await process.wait()
+            self.metrics.record_resource_sample(sample)
+            await asyncio.sleep(max(0.0, interval_s - (time.monotonic() - sample_started)))
 
     async def _produce_input(self) -> None:
         buffer = SlidingWindowBuffer(seed=self.config.model.seed)
@@ -238,6 +317,14 @@ class StreamingService:
                 self.metrics.sequence_errors += 1
                 raise
             self._source_time_by_seq[frame.seq] = frame.source_time_s
+            self._source_metadata_by_seq[frame.seq] = {
+                "source_id": frame.source_id,
+                "source_sha256": frame.source_sha256,
+                "clip_id": frame.clip_id,
+                "clip_frame": frame.clip_frame,
+                "transition_id": frame.transition_id,
+                "in_transition": frame.in_transition,
+            }
             if window is not None:
                 await self._enqueue_inference(window)
         tail_time = (
@@ -288,10 +375,13 @@ class StreamingService:
         )
 
     async def _run_inference(self) -> None:
-        companion_processor = OnlineContinuityProcessor(self.backend)
-        lead_processor = OnlineContinuityProcessor(self.backend)
+        companion_processor = OnlineContinuityProcessor(
+            self.backend,
+            robust_filter_z=self.config.continuity.robust_filter_z,
+        )
         committer = TimelineCommitter()
         last_window = None
+        last_lead_full = None
         while True:
             item = await self._inference_queue.get()
             if item is STOP:
@@ -301,8 +391,12 @@ class StreamingService:
                         if last_window.valid_frames == self.config.window_frames
                         else last_window.valid_frames
                     )
-                    joints = companion_processor.flush(flush_frames)
-                    lead_joints = lead_processor.flush(flush_frames)
+                    joints = companion_processor.flush_with_lead(
+                        last_window.motion, flush_frames
+                    )
+                    lead_joints = last_lead_full[
+                        self.config.hop_frames:self.config.hop_frames + flush_frames
+                    ]
                     batch = committer.commit(
                         last_window.window_id,
                         last_window.start_seq + self.config.hop_frames,
@@ -315,9 +409,20 @@ class StreamingService:
                 await self._output_queue.put(STOP)
                 return
             window = item
+            inference_started_clock = self.clock.now()
             loop = asyncio.get_running_loop()
             chunk = await loop.run_in_executor(self._inference_executor, self.backend.infer, window)
-            self.metrics.record_inference(window, chunk)
+            inference_finished_clock = self.clock.now()
+            self.metrics.record_inference(
+                window,
+                chunk,
+                queue_residence_ms=max(
+                    0.0, (inference_started_clock - window.trigger_time_s) * 1000.0
+                ),
+                batch_ready_ms=max(
+                    0.0, (inference_finished_clock - window.trigger_time_s) * 1000.0
+                ),
+            )
             if chunk.inference_wall_ms > self.config.inference_slo_ms:
                 self.metrics.inference_deadline_misses += 1
                 await self.sink.send({
@@ -337,11 +442,23 @@ class StreamingService:
             # A partial EOF's real tail lives in the successor's pending half
             # and is trimmed when STOP is handled above.
             joints = companion_processor.process(
-                chunk.motion, commit_frames=self.config.hop_frames
+                chunk.motion,
+                commit_frames=self.config.hop_frames,
+                lead_motion=window.motion,
             )
-            lead_joints = lead_processor.process(
-                window.motion, commit_frames=self.config.hop_frames
-            )
+            lead_full = direct_fk(self.backend, window.motion)
+            if last_lead_full is not None:
+                overlap_error = float(
+                    abs(last_lead_full[self.config.hop_frames:] - lead_full[:self.config.hop_frames]).max()
+                )
+                self.metrics.lead_overlap_fk_error.append(overlap_error)
+                if overlap_error > 1e-5:
+                    raise RuntimeError(
+                        f"authoritative lead overlap mismatch at window {window.window_id}: "
+                        f"{overlap_error}"
+                    )
+            lead_joints = lead_full[:self.config.hop_frames]
+            self.motion_quality.record_window(companion_processor.last_metrics, chunk)
             batch = committer.commit(
                 window.window_id,
                 window.start_seq,
@@ -352,6 +469,7 @@ class StreamingService:
             self.metrics.record_commit(len(batch.joints))
             await self._enqueue_output(batch)
             last_window = window
+            last_lead_full = lead_full
 
     async def _enqueue_output(self, batch) -> None:
         if self._output_queue.full():
@@ -405,10 +523,24 @@ class StreamingService:
                     raise RuntimeError(
                         f"missing source time for output frame {output_seq}"
                     ) from exc
+                source_metadata = self._source_metadata_by_seq.pop(output_seq, {})
                 end_to_end_ms = (
                     (now - self._start_clock) - source_time_s
                 ) * 1000.0
                 self.metrics.end_to_end_latency_ms.append(end_to_end_ms)
+                transition_id = source_metadata.get("transition_id")
+                source_transition = (
+                    transition_id is not None and transition_id != self._last_transition_id
+                )
+                model_boundary = output_seq > 0 and output_seq % self.config.hop_frames == 0
+                self.motion_quality.record_frame(
+                    output_seq,
+                    lead_pose,
+                    pose,
+                    model_boundary=model_boundary,
+                    source_transition=source_transition,
+                )
+                self._last_transition_id = transition_id
                 message = {
                     "type": "frame",
                     "schema_version": SCHEMA_VERSION,
@@ -419,16 +551,32 @@ class StreamingService:
                     "seq": output_seq,
                     "source_time_s": source_time_s,
                     "motion_time_s": source_time_s,
+                    "source_id": source_metadata.get("source_id", "lead-motion"),
+                    "source_sha256": source_metadata.get("source_sha256"),
+                    "clip_id": source_metadata.get("clip_id"),
+                    "clip_frame": source_metadata.get("clip_frame"),
+                    "transition_id": transition_id,
+                    "in_transition": bool(source_metadata.get("in_transition")),
                     "target_playout_offset_s": deadline - self._start_clock,
                     "emitted_monotonic_offset_s": now - self._start_clock,
                     "emitted_wall_time_s": time.time(),
                     "wall_time_s": now - self._start_clock,
                     "end_to_end_latency_ms": end_to_end_ms,
+                    "frame_latency_ms": end_to_end_ms,
+                    "send_lateness_ms": (now - deadline) * 1000.0,
                     "window_id": batch.window_id,
                     "commit_start_frame_id": batch.start_frame_id,
                     "commit_end_frame_id": batch.end_frame_id,
                     "commit_kind": batch.commit_kind,
-                    "flags": ["generated", batch.commit_kind],
+                    "boundary": {
+                        "model": model_boundary,
+                        "source_transition": source_transition,
+                    },
+                    "flags": [
+                        "generated", batch.commit_kind,
+                        *(["model-boundary"] if model_boundary else []),
+                        *(["source-transition"] if source_transition else []),
+                    ],
                     "lead_joints": lead_pose.tolist(),
                     "companion_joints": pose.tolist(),
                     "joints": pose.tolist(),
@@ -480,8 +628,8 @@ async def _record_startup_failure(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Duet-EDGE V1 streaming service")
-    parser.add_argument("--config", default="configs/v1.fake.json")
+    parser = argparse.ArgumentParser(description="Duet-EDGE V2 streaming service")
+    parser.add_argument("--config", default="configs/example.json")
     parser.add_argument("--backend", choices=("fake", "recorded", "cuda"))
     parser.add_argument("--input")
     parser.add_argument("--input-format", choices=("fixture", "aist"))
@@ -489,8 +637,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint")
     parser.add_argument("--duet-edge-root")
     parser.add_argument("--clock", choices=("virtual", "realtime"), default="virtual")
-    parser.add_argument("--sink", default="ndjson", help="comma-separated: ndjson,websocket")
+    parser.add_argument(
+        "--sink", default="ndjson", help="comma-separated: ndjson,websocket,web"
+    )
     parser.add_argument("--output-dir")
+    parser.add_argument("--run-dir", help="write directly into an initialized V2 run")
     parser.add_argument("--run-id")
     parser.add_argument("--loop", type=int, default=1)
     parser.add_argument("--fake-delay-s", type=float, default=0.0)
@@ -530,15 +681,25 @@ async def _async_main(args: argparse.Namespace) -> None:
         args.input, "EDGE_INPUT_MOTION", config.paths.input_motion, required=True
     )
     output_base = resolved_path(
-        args.output_dir, "EDGE_OUTPUT_DIR", config.paths.output_dir, required=True
+        args.output_dir,
+        "EDGE_OUTPUT_DIR",
+        config.paths.output_dir,
+        required=not bool(args.run_dir),
     )
-    run_id = args.run_id or str(uuid.uuid4())
+    run_id = args.run_id or (Path(args.run_dir).name if args.run_dir else str(uuid.uuid4()))
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
         raise SystemExit("--run-id must use 1-128 letters, digits, dot, underscore or dash")
-    output_dir = Path(output_base) / run_id
-    if output_dir.exists():
-        raise SystemExit(f"refusing to overwrite existing run directory: {output_dir}")
-    output_dir.mkdir(parents=True)
+    if args.run_dir:
+        output_dir = Path(args.run_dir).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        occupied = [name for name in ("summary.json", "stream.ndjson") if (output_dir / name).exists()]
+        if occupied:
+            raise SystemExit(f"refusing to overwrite V2 run artifacts: {occupied}")
+    else:
+        output_dir = Path(output_base) / run_id
+        if output_dir.exists():
+            raise SystemExit(f"refusing to overwrite existing run directory: {output_dir}")
+        output_dir.mkdir(parents=True)
 
     root_scaled = (
         args.root_scaled == "true"
@@ -560,9 +721,10 @@ async def _async_main(args: argparse.Namespace) -> None:
         stream=stream,
     )
     effective_config = {"run_id": run_id, **config.as_dict()}
-    (output_dir / "effective_config.json").write_text(
-        json.dumps(effective_config, indent=2) + "\n", encoding="utf-8"
-    )
+    serialized_config = json.dumps(effective_config, indent=2) + "\n"
+    if not args.run_dir:
+        (output_dir / "config.json").write_text(serialized_config, encoding="utf-8")
+    (output_dir / "effective_config.json").write_text(serialized_config, encoding="utf-8")
 
     if backend_name == "fake":
         backend = FakeInferenceBackend(delay_s=args.fake_delay_s)
@@ -579,7 +741,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         )
 
     sink_names = {name.strip() for name in args.sink.split(",") if name.strip()}
-    unknown = sink_names - {"ndjson", "websocket"}
+    unknown = sink_names - {"ndjson", "websocket", "web"}
     if unknown:
         raise SystemExit(f"unknown sinks: {sorted(unknown)}")
     sinks = []
@@ -590,11 +752,31 @@ async def _async_main(args: argparse.Namespace) -> None:
         def on_drop(client_id):
             if metrics_ref is not None:
                 metrics_ref.record_view_drop(client_id)
+        def on_connect():
+            if metrics_ref is not None:
+                metrics_ref.record_client_connected()
+        def on_disconnect(duration_s):
+            if metrics_ref is not None:
+                metrics_ref.record_client_disconnected(duration_s)
+        def on_telemetry(message):
+            if metrics_ref is not None:
+                metrics_ref.record_client_telemetry(message)
         sinks.append(
             WebSocketSink(
-                config.bind_host, config.port, config.viewer_queue_frames, on_drop
+                config.bind_host,
+                config.port,
+                config.viewer_queue_frames,
+                on_drop,
+                on_connect,
+                on_disconnect,
+                on_telemetry,
             )
         )
+    if "web" in sink_names:
+        web_root = Path(config.server.web_root)
+        if not web_root.is_absolute():
+            web_root = REPOSITORY_ROOT / web_root
+        sinks.append(StaticWebSink(config.bind_host, config.web_port, web_root))
     if not sinks:
         raise SystemExit("at least one sink is required")
     clock = VirtualClock() if args.clock == "virtual" else RealtimeClock()
@@ -632,6 +814,9 @@ async def _async_main(args: argparse.Namespace) -> None:
                 engine_root,
                 root_scaled=root_scaled,
                 fps=config.fps,
+                start_frame=config.input.start_frame,
+                end_frame=config.input.end_frame,
+                loop=args.loop,
             )
     except Exception as exc:
         await _record_startup_failure(
@@ -654,7 +839,10 @@ def main() -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    asyncio.run(_async_main(args))
+    try:
+        asyncio.run(_async_main(args))
+    except KeyboardInterrupt:
+        LOG.info("service stopped by operator")
 
 
 if __name__ == "__main__":

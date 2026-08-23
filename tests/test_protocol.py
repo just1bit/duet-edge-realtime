@@ -60,7 +60,9 @@ class ProtocolTests(unittest.TestCase):
             asyncio.run(service.run())
             messages = [json.loads(line) for line in (root / "stream.ndjson").read_text().splitlines()]
             self.assertEqual(messages[0]["type"], "hello")
-            self.assertEqual(messages[0]["protocol"], "duet-edge-stream/v2")
+            self.assertEqual(messages[0]["protocol"], "duet-edge-stream/v3")
+            self.assertEqual(messages[0]["schema_version"], "3.0.0")
+            self.assertEqual(messages[0]["model_mode"], "lead-only")
             self.assertEqual(len(messages[0]["parents"]), 24)
             states = [message["state"] for message in messages if message["type"] == "state"]
             self.assertEqual(states, ["starting", "buffering", "playing", "draining", "finished"])
@@ -83,7 +85,8 @@ class ProtocolTests(unittest.TestCase):
                 frame["joints"] == frame["companion_joints"] for frame in frames
             ))
             self.assertTrue(all(frame["frame_id"] == frame["seq"] for frame in frames))
-            self.assertTrue(all(frame["schema_version"] == "2.0.0" for frame in frames))
+            self.assertTrue(all(frame["schema_version"] == "3.0.0" for frame in frames))
+            self.assertTrue(all("boundary" in frame for frame in frames))
             self.assertEqual(messages[-1]["type"], "eos")
             summary = json.loads((root / "summary.json").read_text())
             self.assertEqual(summary["output"]["frames"], 300)

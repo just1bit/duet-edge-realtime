@@ -9,6 +9,23 @@ from helpers import identity_motion
 
 
 class ContinuityTests(unittest.TestCase):
+    def test_relative_root_correction_is_local_and_decays(self):
+        lead = identity_motion(225, root_step=0.01)
+        lead_windows = (lead[:150], lead[75:225])
+        generated = [item.copy() for item in lead_windows]
+        generated[0][:, 5] += 1.0
+        generated[1][:, 5] += 3.0
+        processor = OnlineContinuityProcessor(IdentityNormalizer())
+        first = processor.process(generated[0], lead_motion=lead_windows[0])
+        second = processor.process(generated[1], lead_motion=lead_windows[1])
+        tail = processor.flush_with_lead(lead_windows[1])
+        # Compare root Y against the authoritative lead root timeline.
+        lead_roots = lead[:, 4:7]
+        companion_roots = np.concatenate((first, second, tail))[:, 0]
+        self.assertAlmostEqual(companion_roots[75, 1] - lead_roots[75, 1], 1.0, places=5)
+        self.assertGreater(companion_roots[149, 1] - lead_roots[149, 1], 2.9)
+        self.assertAlmostEqual(companion_roots[-1, 1] - lead_roots[-1, 1], 3.0, places=5)
+        self.assertAlmostEqual(processor.pending_frames, 0)
     def test_ramp_endpoints_and_translation_alignment(self):
         processor = OnlineContinuityProcessor(IdentityNormalizer())
         first = identity_motion(150)

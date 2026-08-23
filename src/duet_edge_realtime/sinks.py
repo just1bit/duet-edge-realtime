@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -90,10 +92,22 @@ class ViewerMailbox:
 
 
 class WebSocketSink(Sink):
-    def __init__(self, host: str, port: int, queue_frames: int, on_drop=None):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        queue_frames: int,
+        on_drop=None,
+        on_connect=None,
+        on_disconnect=None,
+        on_telemetry=None,
+    ):
         self.host, self.port = host, port
         self.queue_frames = queue_frames
         self.on_drop = on_drop
+        self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
+        self.on_telemetry = on_telemetry
         self.server = None
         self.hello: dict | None = None
         self.latest_status: dict[str, dict] = {}
@@ -105,22 +119,44 @@ class WebSocketSink(Sink):
         self.hello = hello
         self.server = await websockets.serve(self._handler, self.host, self.port)
 
+    async def update_hello(self, hello: dict) -> None:
+        """Replace the session hello and publish it to already connected viewers."""
+        self.hello = hello
+        self.latest_status.clear()
+        payload = json.dumps(hello, separators=(",", ":"), allow_nan=False)
+        for client in list(self.clients):
+            try:
+                await client.send(payload)
+            except Exception:
+                continue
+
     async def _handler(self, websocket) -> None:
+        connected_at = time.monotonic()
         queue = ViewerMailbox(self.queue_frames)
         sender = asyncio.create_task(self._sender(websocket, queue))
         self.clients[websocket] = (queue, sender)
         self.client_ids[websocket] = f"viewer-{self._next_client_id}"
         self._next_client_id += 1
+        if self.on_connect:
+            self.on_connect()
         try:
             await websocket.send(json.dumps(self.hello, separators=(",", ":")))
             for status in self.latest_status.values():
                 await websocket.send(json.dumps(status, separators=(",", ":")))
-            await websocket.wait_closed()
+            async for raw in websocket:
+                try:
+                    message = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if message.get("type") == "client_metrics" and self.on_telemetry:
+                    self.on_telemetry(message)
         finally:
             self.clients.pop(websocket, None)
             self.client_ids.pop(websocket, None)
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
+            if self.on_disconnect:
+                self.on_disconnect(time.monotonic() - connected_at)
 
     async def _sender(self, websocket, queue: ViewerMailbox) -> None:
         while True:
@@ -170,3 +206,76 @@ class CompositeSink(Sink):
     async def close(self) -> None:
         for sink in reversed(self.sinks):
             await sink.close()
+
+
+class StaticWebSink(Sink):
+    """Small integrated HTTP server for the Viewer and `/health`."""
+
+    def __init__(self, host: str, port: int, web_root: str | Path):
+        self.host = host
+        self.port = port
+        self.web_root = Path(web_root).resolve()
+        self.server = None
+        self.hello = None
+
+    async def start(self, hello: dict) -> None:
+        if not self.web_root.is_dir():
+            raise FileNotFoundError(self.web_root)
+        self.hello = hello
+        self.server = await asyncio.start_server(
+            self._handle_request, self.host, self.port
+        )
+
+    async def send(self, message: dict) -> None:
+        return None
+
+    async def close(self) -> None:
+        if self.server is not None:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+
+    async def _handle_request(self, reader, writer) -> None:
+        try:
+            request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 2.0)
+            first = request.split(b"\r\n", 1)[0].decode("ascii", "replace")
+            method, target, _ = first.split(" ", 2)
+            if method != "GET":
+                await self._respond(writer, 405, b"method not allowed\n", "text/plain")
+                return
+            path = target.split("?", 1)[0]
+            if path == "/health":
+                body = json.dumps({
+                    "ok": True,
+                    "protocol": self.hello.get("protocol"),
+                    "run_id": self.hello.get("run_id"),
+                }).encode()
+                await self._respond(writer, 200, body, "application/json")
+                return
+            relative = "index.html" if path == "/" else path.lstrip("/")
+            asset = (self.web_root / relative).resolve()
+            if not asset.is_relative_to(self.web_root) or not asset.is_file():
+                await self._respond(writer, 404, b"not found\n", "text/plain")
+                return
+            content_type = mimetypes.guess_type(asset.name)[0] or "application/octet-stream"
+            await self._respond(writer, 200, asset.read_bytes(), content_type)
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
+            await self._respond(writer, 400, b"bad request\n", "text/plain")
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    @staticmethod
+    async def _respond(writer, status: int, body: bytes, content_type: str) -> None:
+        reasons = {200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed"}
+        header = (
+            f"HTTP/1.1 {status} {reasons[status]}\r\n"
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("ascii")
+        writer.write(header + body)
+        await writer.drain()

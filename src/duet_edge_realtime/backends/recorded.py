@@ -221,3 +221,6 @@ class RecordedInferenceBackend(InferenceBackend):
             "source_backend": self._metadata.get("backend", "cuda"),
             "source_checkpoint_sha256": self._metadata.get("checkpoint_sha256"),
         }
+
+    def start_session(self, session_id: str) -> None:
+        self.calls = 0
