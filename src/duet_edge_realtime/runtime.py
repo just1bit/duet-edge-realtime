@@ -82,6 +82,23 @@ class RuntimeDaemon:
         self.shutdown_event = asyncio.Event()
 
     def status(self) -> dict:
+        progress = None
+        if self.active_service is not None:
+            total_frames = None
+            manifest_path = self.run_dir / "input-manifest.json"
+            if manifest_path.is_file():
+                try:
+                    total_frames = json.loads(
+                        manifest_path.read_text(encoding="utf-8")
+                    ).get("estimated_frames_30fps")
+                except (OSError, ValueError):
+                    pass
+            progress = {
+                "input_frames": self.active_service.metrics.input_frames,
+                "output_frames": self.active_service.metrics.output_frames,
+                "total_frames": total_frames,
+                "inference_windows": self.active_service.metrics.inference_count,
+            }
         return {
             "ok": self.error is None,
             "run_id": self.run_id,
@@ -95,7 +112,11 @@ class RuntimeDaemon:
                     if self.viewer_state == "ready" else None
                 ),
             },
-            "session": {"state": self.session_state, "session_id": self.session_id},
+            "session": {
+                "state": self.session_state,
+                "session_id": self.session_id,
+                "progress": progress,
+            },
             "error": self.error,
         }
 

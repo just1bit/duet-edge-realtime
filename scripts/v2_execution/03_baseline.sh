@@ -2,6 +2,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
+stage_begin "03" "Baseline and Automatic Configuration" 3
 run_arg "$@"
 backend="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["backend"])' "${RUN_ROOT}/config.json")"
 baseline_root="${RUN_ROOT}/evidence/baseline-runs"
@@ -17,6 +18,7 @@ if [[ ! -f "${baseline_root}/baseline/summary.json" ]]; then
     --run-id baseline --clock realtime --sink ndjson \
     --loop 1 "${input_args[@]}"
 fi
+stage_step "Quality baseline completed"
 timing_summary="${baseline_root}/baseline/summary.json"
 if [[ "${baseline_loops}" -gt 1 ]]; then
   timing_summary="${baseline_root}/timing-baseline/summary.json"
@@ -27,6 +29,8 @@ if [[ "${baseline_loops}" -gt 1 ]]; then
       --loop "${baseline_loops}" "${input_args[@]}"
   fi
 fi
+stage_step "Timing baseline completed"
 "${PYTHON_BIN}" scripts/v2_execution/lib/run.py calibrate --run "${RUN_ROOT}" \
   --summary "${timing_summary}" \
   --quality-summary "${baseline_root}/baseline/summary.json"
+stage_step "Configuration calibrated and locked"

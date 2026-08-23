@@ -4,11 +4,17 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
 run=""
 while [[ $# -gt 0 ]]; do case "$1" in --run) run="$2";shift 2;; *) shift;; esac; done
+stage_begin "08" "Input and Formal Realtime Run" 4
 load_run "${run}"
 "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" start-run
+stage_step "Formal run request accepted"
 timeout_s="$("${PYTHON_BIN}" -c 'import json,sys;v=json.load(open(sys.argv[1]));print(max(120,int(v["duration_s"]+600)))' "${RUN_ROOT}/input-manifest.json")"
+stage_step "Input manifest and run parameters loaded"
 "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" wait \
-  --field session.state --value finished --fail-value failed --timeout "${timeout_s}" --interval 2
+  --field session.state --value finished --fail-value failed --timeout "${timeout_s}" --interval 2 \
+  --label "Realtime inference and playout"
+stage_step "All input frames processed"
 test -f "${RUN_ROOT}/summary.json"
 test -f "${RUN_ROOT}/stream.ndjson"
 printf 'Formal run completed: %s\n' "${RUN_ROOT}"
+stage_step "Run evidence written"

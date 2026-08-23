@@ -2,12 +2,16 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
+stage_begin "02" "Runtime Check and Smoke Test" 6
 run_arg "$@"
-"${PYTHON_BIN}" -m pytest
+"${PYTHON_BIN}" -m pytest -q
+stage_step "Automated tests passed"
 "${PYTHON_BIN}" scripts/v2_execution/lib/run.py input --run "${RUN_ROOT}"
+stage_step "Input data validated"
 for asset_dir in baseline_input smoke_input stitched_long_input; do
   (cd "${PROJECT_ROOT}/data+checkpoint/${asset_dir}" && shasum -a 256 -c SHA256SUMS)
 done
+stage_step "Test asset hashes verified"
 backend="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["backend"])' "${RUN_ROOT}/config.json")"
 if [[ "${backend}" == "cuda" && ! -f "${RUN_ROOT}/evidence/smoke-runs/cuda-smoke/summary.json" ]]; then
   "${PYTHON_BIN}" -m duet_edge_realtime.service \
@@ -17,6 +21,7 @@ if [[ "${backend}" == "cuda" && ! -f "${RUN_ROOT}/evidence/smoke-runs/cuda-smoke
     --output-dir "${RUN_ROOT}/evidence/smoke-runs" --run-id cuda-smoke \
     --clock virtual --sink ndjson
 fi
+stage_step "Backend smoke run completed"
 "${PYTHON_BIN}" - "${RUN_ROOT}/config.json" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
@@ -30,3 +35,5 @@ for name, item in config["assets"].items():
         raise SystemExit(f"{name} hash changed")
 print("Runtime, tests, input, and asset hashes are ready.")
 PY
+stage_step "Configured asset identities confirmed"
+stage_step "Runtime environment ready"
