@@ -294,7 +294,7 @@ def command_calibrate(args) -> None:
             ),
             "ground_penetration_p99_max": (
                 None if metric("ground_penetration", "p99") is None
-                else max(0.01, metric("ground_penetration", "p99") * 1.5)
+                else max(0.1, metric("ground_penetration", "p99") * 1.5)
             ),
         }
     config["stream"]["inference_slo_ms"] = calibration["inference_slo_ms"]

@@ -259,6 +259,12 @@ bash scripts/v2_execution/service.sh status
 bash scripts/v2_execution/service.sh stop
 ```
 
+如果 control port 由另一个 `RUN_ROOT` 的 Runtime 占用，身份校验会显示实际 `run_id` 和停止命令。也可手动指定该运行：
+
+```bash
+bash scripts/v2_execution/service.sh stop --run outputs/<run_id>
+```
+
 一次完成的运行包含：
 
 ```text

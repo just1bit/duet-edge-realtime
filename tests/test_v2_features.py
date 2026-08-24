@@ -151,9 +151,25 @@ class V2FeatureTests(unittest.TestCase):
                 return {"run_id": "run-old"}
 
             client["request"].__globals__["raw_request"] = raw_request
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"stop --run .*/run-old",
+            ):
                 client["request"](run, "POST", "/viewer/start")
             self.assertEqual(calls, [("GET", "/status")])
+
+            calls.clear()
+
+            def matching_request(_run, method, path):
+                calls.append((method, path))
+                return {"run_id": run.name}
+
+            client["request"].__globals__["raw_request"] = matching_request
+            client["request"](run, "POST", "/shutdown")
+            self.assertEqual(
+                calls,
+                [("GET", "/status"), ("POST", "/shutdown")],
+            )
 
     def test_runtime_client_flushes_waits_and_falls_back_to_model_progress(self):
         client = runpy.run_path(str(
@@ -176,6 +192,15 @@ class V2FeatureTests(unittest.TestCase):
                 5.0, "Realtime inference and playout", emit_non_tty=True
             )
         self.assertTrue(output.call_args.kwargs["flush"])
+
+    def test_viewer_delay_uses_single_monotonic_clock(self):
+        viewer = (
+            Path(__file__).parents[1] / "web/viewer.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("recordFrameArrival", viewer)
+        self.assertIn("performance.now()", viewer)
+        self.assertIn("!document.hidden", viewer)
+        self.assertNotIn("Date.now() - state.frame.emitted_wall_time_s", viewer)
 
     def test_runtime_wait_can_restore_final_status_json_without_extra_request(self):
         client = runpy.run_path(str(

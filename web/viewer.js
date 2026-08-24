@@ -6,6 +6,7 @@ const state = {
   fps: 30, frame: null, replay: [], replayIndex: 0, playhead: 0, paused: false,
   lastTick: performance.now(), yaw: -.42, dragging: false, pointerX: 0,
   telemetryAt: performance.now(), renderedFrames: 0, visibleStalls: 0,
+  arrivalAnchorAt: null, arrivalAnchorFrame: null, viewerDelayMs: null,
 };
 
 function status(text, tone = 'waiting') {
@@ -75,10 +76,23 @@ function draw(frame) {
   $('e2e').textContent = frame.end_to_end_latency_ms == null ? '—' : `${frame.end_to_end_latency_ms.toFixed(1)} ms`;
 }
 
-function frameAge(frame) {
-  return frame.emitted_wall_time_s
-    ? `${Math.max(0, Date.now() - frame.emitted_wall_time_s * 1000).toFixed(0)} ms`
+function frameAge() {
+  return Number.isFinite(state.viewerDelayMs)
+    ? `${state.viewerDelayMs.toFixed(0)} ms`
     : '—';
+}
+
+function recordFrameArrival(frame) {
+  const frameId = frame.frame_id ?? frame.seq;
+  if (!Number.isFinite(frameId)) return;
+  const arrivedAt = performance.now();
+  if (state.arrivalAnchorAt == null || state.arrivalAnchorFrame == null) {
+    state.arrivalAnchorAt = arrivedAt;
+    state.arrivalAnchorFrame = frameId;
+  }
+  const expectedAt = state.arrivalAnchorAt
+    + (frameId - state.arrivalAnchorFrame) * 1000 / state.fps;
+  state.viewerDelayMs = Math.max(0, arrivedAt - expectedAt);
 }
 
 function formatStreamTime(frame) {
@@ -97,6 +111,9 @@ function handle(message) {
   if (message.type === 'hello') {
     state.parents = message.parents || [];
     state.fps = message.fps || 30;
+    state.arrivalAnchorAt = null;
+    state.arrivalAnchorFrame = null;
+    state.viewerDelayMs = null;
   } else if (message.type === 'state') {
     const label = {starting:'Starting', buffering:'Buffering', playing:'Live', draining:'Finishing', finished:'Completed', failed:'Failed'}[message.state];
     state.running = message.state === 'playing' || message.state === 'draining';
@@ -114,6 +131,7 @@ function handle(message) {
       state.completed = false;
       state.hasLiveFrame = true;
     }
+    if (state.mode === 'live') recordFrameArrival(message);
     draw(message);
   } else if (message.type === 'metrics') {
     if (state.mode === 'live' && !state.hasLiveFrame) return;
@@ -149,6 +167,9 @@ function connect(manual = false) {
   mode('live');
   state.running = false;
   state.hasLiveFrame = false;
+  state.arrivalAnchorAt = null;
+  state.arrivalAnchorFrame = null;
+  state.viewerDelayMs = null;
   if (manual || leavingReplay) state.completed = false;
   if (leavingReplay) clearViewer();
   if (state.ws) {
@@ -232,13 +253,18 @@ window.onpointerup = () => {
   state.dragging = false;
   canvas.classList.remove('dragging');
 };
+document.addEventListener('visibilitychange', () => {
+  state.lastTick = performance.now();
+});
 
 function tick(now) {
   const rawElapsed = (now - state.lastTick) / 1000;
   const elapsed = Math.min(.1, rawElapsed);
   state.lastTick = now;
   state.renderedFrames += 1;
-  if (state.mode === 'live' && state.running && rawElapsed > .1) state.visibleStalls += 1;
+  if (
+    state.mode === 'live' && state.running && !document.hidden && rawElapsed > .1
+  ) state.visibleStalls += 1;
   const telemetryElapsed = now - state.telemetryAt;
   if (
     state.mode === 'live' && state.frame && telemetryElapsed >= 1000
@@ -247,16 +273,13 @@ function tick(now) {
     state.ws.send(JSON.stringify({
       type: 'client_metrics',
       render_fps: state.renderedFrames * 1000 / telemetryElapsed,
-      frame_age_ms: Number.isFinite(state.frame.emitted_wall_time_s)
-        ? Math.max(0, Date.now() - state.frame.emitted_wall_time_s * 1000)
-        : null,
+      frame_age_ms: state.viewerDelayMs,
       visible_stalls: state.visibleStalls,
     }));
     state.telemetryAt = now;
     state.renderedFrames = 0;
     state.visibleStalls = 0;
   }
-  if (state.mode === 'live' && state.running && state.frame) $('age').textContent = frameAge(state.frame);
   if (state.mode === 'replay' && !state.paused && state.replay.length) {
     state.playhead += elapsed * state.fps;
     const index = Math.min(state.replay.length - 1, Math.floor(state.playhead));

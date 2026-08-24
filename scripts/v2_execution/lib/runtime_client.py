@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import time
 import urllib.error
 import urllib.request
@@ -92,10 +93,14 @@ def base_url(run: Path) -> str:
 def validate_identity(run: Path, payload: dict) -> None:
     actual_run_id = payload.get("run_id")
     if actual_run_id != run.name:
+        owner_run = run.parent / str(actual_run_id)
+        service_script = Path(__file__).resolve().parents[1] / "service.sh"
         raise RuntimeError(
             "Control port belongs to a different runtime: "
             f"expected run_id={run.name}, got run_id={actual_run_id!r}. "
-            "Stop the owning runtime before starting this run."
+            "Stop the owning runtime before starting this run.\n"
+            f"Run: bash {shlex.quote(str(service_script))} stop --run "
+            f"{shlex.quote(str(owner_run))}"
         )
 
 def raw_request(run: Path, method: str, path: str) -> dict:
