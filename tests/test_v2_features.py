@@ -17,10 +17,33 @@ import numpy as np
 
 from duet_edge_realtime.backends.duet_edge import CudaDuetEdgeBackend
 from duet_edge_realtime.motion_quality import OnlineMotionQuality
+from duet_edge_realtime.progress import TerminalProgress
 from duet_edge_realtime.sinks import StaticWebSink
 
 
 class V2FeatureTests(unittest.TestCase):
+    def test_captured_progress_uses_tty_and_distinct_bar_styles(self):
+        class FakeTTY(io.StringIO):
+            def isatty(self):
+                return True
+
+        terminal = FakeTTY()
+        captured_stdout = io.StringIO()
+        event = {
+            "phase": "inference", "window": 2, "windows": 4,
+            "step": 5, "steps": 10,
+        }
+        with patch.dict(os.environ, {"STAGE_CAPTURE_ACTIVE": "1"}), \
+                patch.object(os, "isatty", return_value=False), \
+                patch("builtins.open", return_value=terminal), \
+                redirect_stdout(captured_stdout):
+            TerminalProgress(True, width=10).model_update(event, force=True)
+
+        output = terminal.getvalue()
+        self.assertEqual(captured_stdout.getvalue(), "")
+        self.assertIn("[===.......]", output)
+        self.assertIn("[#####-----]", output)
+
     def test_stage_capture_mirrors_both_streams_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 
@@ -10,7 +11,13 @@ class TerminalProgress:
     def __init__(self, enabled: bool = False, width: int = 28) -> None:
         self.enabled = enabled
         self.width = width
-        self.is_tty = os.isatty(1)
+        self._output = sys.stdout
+        if enabled and not os.isatty(1) and os.environ.get("STAGE_CAPTURE_ACTIVE") == "1":
+            try:
+                self._output = open("/dev/tty", "w", encoding="utf-8", buffering=1)
+            except OSError:
+                pass
+        self.is_tty = self._output.isatty()
         self._last_model_s = 0.0
         self._model_lines_active = False
 
@@ -44,21 +51,38 @@ class TerminalProgress:
                 overall_total,
                 f"Overall {phase.lower()}",
                 f"window {window}/{windows}",
+                "=",
+                ".",
             ),
-            self._bar(step, steps, "Current window sampling", f"step {step}/{steps}"),
+            self._bar(
+                step,
+                steps,
+                "Current window sampling",
+                f"step {step}/{steps}",
+                "#",
+                "-",
+            ),
         ]
         self._last_model_s = now
         if self.is_tty:
             if self._model_lines_active:
-                print("\033[2A", end="", flush=True)
+                print("\033[2A", end="", flush=True, file=self._output)
             for line in lines:
-                print("\r" + line.ljust(90))
+                print("\r" + line.ljust(90), file=self._output)
             self._model_lines_active = not (window == windows and step == steps)
         else:
-            print("\n".join(lines), flush=True)
+            print("\n".join(lines), flush=True, file=self._output)
 
-    def _bar(self, current: int, total: int, label: str, detail: str) -> str:
+    def _bar(
+        self,
+        current: int,
+        total: int,
+        label: str,
+        detail: str,
+        fill: str,
+        empty: str,
+    ) -> str:
         ratio = min(1.0, current / total) if total > 0 else 0.0
         filled = min(self.width, int(self.width * ratio))
-        bar = "=" * filled + "." * (self.width - filled)
+        bar = fill * filled + empty * (self.width - filled)
         return f"[{bar}] {ratio * 100:3.0f}%  {label} · {detail}"
