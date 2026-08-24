@@ -9,7 +9,7 @@ from helpers import identity_motion
 
 
 class ContinuityTests(unittest.TestCase):
-    def test_relative_root_correction_is_local_and_decays(self):
+    def test_relative_root_correction_stays_within_spatial_envelope(self):
         lead = identity_motion(225, root_step=0.01)
         lead_windows = (lead[:150], lead[75:225])
         generated = [item.copy() for item in lead_windows]
@@ -22,10 +22,20 @@ class ContinuityTests(unittest.TestCase):
         # Compare root Y against the authoritative lead root timeline.
         lead_roots = lead[:, 4:7]
         companion_roots = np.concatenate((first, second, tail))[:, 0]
-        self.assertAlmostEqual(companion_roots[75, 1] - lead_roots[75, 1], 1.0, places=5)
-        self.assertGreater(companion_roots[149, 1] - lead_roots[149, 1], 2.9)
-        self.assertAlmostEqual(companion_roots[-1, 1] - lead_roots[-1, 1], 3.0, places=5)
+        separation = np.linalg.norm(companion_roots[:, :2] - lead_roots[:, :2], axis=1)
+        self.assertLessEqual(float(np.max(separation)), 1.0 + 1e-8)
+        self.assertGreater(companion_roots[149, 1] - lead_roots[149, 1], 0.99)
+        self.assertGreater(companion_roots[-1, 1] - lead_roots[-1, 1], 0.99)
         self.assertAlmostEqual(processor.pending_frames, 0)
+
+    def test_relative_root_soft_limit_preserves_near_field_and_vertical(self):
+        processor = OnlineContinuityProcessor(IdentityNormalizer())
+        roots = np.asarray([[0.3, 0.4, -2.0], [3.0, 4.0, 7.0]])
+        bounded = processor._soft_bound_horizontal(roots)
+        np.testing.assert_allclose(bounded[0], roots[0])
+        self.assertLessEqual(np.linalg.norm(bounded[1, :2]), 1.0)
+        np.testing.assert_allclose(bounded[:, 2], roots[:, 2])
+
     def test_ramp_endpoints_and_translation_alignment(self):
         processor = OnlineContinuityProcessor(IdentityNormalizer())
         first = identity_motion(150)

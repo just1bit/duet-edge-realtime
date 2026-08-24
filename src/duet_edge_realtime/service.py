@@ -379,6 +379,10 @@ class StreamingService:
         companion_processor = OnlineContinuityProcessor(
             self.backend,
             robust_filter_z=self.config.continuity.robust_filter_z,
+            relative_root_soft_knee=(
+                self.config.continuity.relative_root_soft_knee
+            ),
+            relative_root_softness=self.config.continuity.relative_root_softness,
         )
         committer = TimelineCommitter()
         last_window = None

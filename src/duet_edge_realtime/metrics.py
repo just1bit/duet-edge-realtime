@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import platform
-import resource
 import statistics
 import time
 from collections import deque
@@ -72,7 +71,7 @@ class RunMetrics:
     client_render_fps: deque = field(default_factory=lambda: deque(maxlen=4096))
     client_frame_age_ms: deque = field(default_factory=lambda: deque(maxlen=4096))
     client_visible_stalls: int = 0
-    resource_samples: deque = field(default_factory=lambda: deque(maxlen=4096))
+    resource_samples: deque = field(default_factory=lambda: deque(maxlen=8192))
     motion_quality: dict = field(default_factory=dict)
     lead_overlap_fk_error: deque = field(default_factory=lambda: deque(maxlen=4096))
 
@@ -106,13 +105,6 @@ class RunMetrics:
         self.handoff_state_bytes.append(chunk.handoff_state_bytes)
         self.handoff_used += int(chunk.handoff_used)
         self.handoff_produced += int(chunk.handoff_produced)
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        self.resource_samples.append({
-            "wall_time_s": time.time(),
-            "cpu_user_s": usage.ru_utime,
-            "cpu_system_s": usage.ru_stime,
-            "rss_kib": usage.ru_maxrss,
-        })
 
     def live_message(self) -> dict:
         return {

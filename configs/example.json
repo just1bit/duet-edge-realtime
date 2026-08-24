@@ -24,6 +24,8 @@
     "causal_overlap": true,
     "relative_root_correction": true,
     "robust_filter_z": 6.0,
+    "relative_root_soft_knee": 0.8,
+    "relative_root_softness": 0.2,
     "diagnostic_sample_limit": 32
   },
   "stream": {

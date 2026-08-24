@@ -13,6 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+
 from duet_edge_realtime.backends.duet_edge import CudaDuetEdgeBackend
 from duet_edge_realtime.motion_quality import OnlineMotionQuality
 from duet_edge_realtime.sinks import StaticWebSink
@@ -196,12 +198,24 @@ class V2FeatureTests(unittest.TestCase):
 
     def test_motion_quality_detects_identical_pose(self):
         quality = OnlineMotionQuality()
+        self.assertGreaterEqual(quality.sample_limit, 10 * 60 * quality.fps)
         joints = [[[float(index), 0.0, 1.0] for index in range(24)]] * 3
         for frame_id, pose in enumerate(joints):
             quality.record_frame(frame_id, pose, pose)
         summary = quality.summary()
         self.assertEqual(summary["distinctness_body_centered"]["max"], 0.0)
         self.assertEqual(summary["root_position_step"]["max"], 0.0)
+
+    def test_motion_quality_uses_authoritative_lead_ground(self):
+        quality = OnlineMotionQuality()
+        lead = np.zeros((24, 3), dtype=np.float64)
+        companion = lead.copy()
+        companion[:, 2] = 0.2
+        quality.record_frame(0, lead, companion)
+        companion[:, 2] = -0.05
+        quality.record_frame(1, lead, companion)
+        summary = quality.summary()
+        self.assertAlmostEqual(summary["ground_penetration"]["max"], 0.05)
 
     def test_integrated_web_sink_serves_health_and_assets(self):
         async def scenario():

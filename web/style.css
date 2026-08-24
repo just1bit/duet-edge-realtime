@@ -79,14 +79,6 @@ button:disabled { cursor: default; opacity: .35; }
 }
 canvas { display: block; width: 100%; height: auto; cursor: grab; }
 canvas.dragging { cursor: grabbing; }
-.center-line {
-  position: absolute;
-  top: 42px;
-  bottom: 24px;
-  left: 50%;
-  border-left: 1px solid var(--line);
-  pointer-events: none;
-}
 .dancer-label {
   position: absolute;
   top: 13px;
@@ -96,8 +88,8 @@ canvas.dragging { cursor: grabbing; }
   transform: translateX(-50%);
   pointer-events: none;
 }
-.dancer-label.lead { left: 25%; color: var(--lead); }
-.dancer-label.companion { left: 75%; color: var(--companion); }
+.dancer-label.lead { left: 30%; color: var(--lead); }
+.dancer-label.companion { left: 70%; color: var(--companion); }
 .dancer-label i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .dancer-label span { font-weight: 800; letter-spacing: .14em; }
 .dancer-label small { color: var(--muted); font-size: 10px; }

@@ -26,6 +26,8 @@ class OnlineContinuityProcessor:
         hop: int = 75,
         *,
         robust_filter_z: float = 6.0,
+        relative_root_soft_knee: float = 0.8,
+        relative_root_softness: float = 0.2,
     ):
         if horizon != 150 or hop != 75:
             raise ValueError("V2 continuity requires 150/75")
@@ -33,6 +35,8 @@ class OnlineContinuityProcessor:
         self.horizon = horizon
         self.hop = hop
         self.robust_filter_z = robust_filter_z
+        self.relative_root_soft_knee = relative_root_soft_knee
+        self.relative_root_softness = relative_root_softness
         self._pending_relative_root: np.ndarray | None = None
         self._pending_q: np.ndarray | None = None
         self.last_metrics: dict = {}
@@ -73,6 +77,7 @@ class OnlineContinuityProcessor:
                 raise ValueError(f"unnormalized lead must be (150,151), got {lead.shape}")
             lead_roots = lead[:, 4:7].astype(np.float64, copy=False)
             relative_root = self._filter_relative_root(roots - lead_roots)
+            relative_root = self._soft_bound_horizontal(relative_root)
             legacy_alignment = False
 
         if self._pending_relative_root is None:
@@ -97,6 +102,9 @@ class OnlineContinuityProcessor:
             emitted_q = slerp(
                 self._pending_q, quaternions[:self.hop], weight[:, None, :]
             )
+
+        if not legacy_alignment:
+            emitted_relative_root = self._limit_horizontal(emitted_relative_root)
 
         self._pending_relative_root = relative_root[self.hop:].copy()
         self._pending_q = quaternions[self.hop:].copy()
@@ -153,6 +161,27 @@ class OnlineContinuityProcessor:
         limit = self.robust_filter_z * np.maximum(1.4826 * mad, 1e-6)
         filtered_steps = np.clip(steps, median - limit, median + limit)
         return np.concatenate((roots[:1], roots[:1] + np.cumsum(filtered_steps, axis=0)))
+
+    def _soft_bound_horizontal(self, roots: np.ndarray) -> np.ndarray:
+        """Compress implausible duet separation without changing direction or Z."""
+        bounded = roots.copy()
+        radius = np.linalg.norm(bounded[:, :2], axis=1)
+        excess = np.maximum(0.0, radius - self.relative_root_soft_knee)
+        target = self.relative_root_soft_knee + self.relative_root_softness * np.tanh(
+            excess / self.relative_root_softness
+        )
+        target = np.where(radius <= self.relative_root_soft_knee, radius, target)
+        bounded[:, :2] *= (target / np.maximum(radius, 1e-12))[:, None]
+        return bounded
+
+    def _limit_horizontal(self, roots: np.ndarray) -> np.ndarray:
+        """Keep overlap blending inside the soft leash's asymptotic envelope."""
+        bounded = roots.copy()
+        radius = np.linalg.norm(bounded[:, :2], axis=1)
+        limit = self.relative_root_soft_knee + self.relative_root_softness
+        scale = np.minimum(1.0, limit / np.maximum(radius, 1e-12))
+        bounded[:, :2] *= scale[:, None]
+        return bounded
 
 
 def direct_fk(normalizer: Normalizer, normalized_motion: np.ndarray) -> np.ndarray:

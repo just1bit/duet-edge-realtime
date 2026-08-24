@@ -15,7 +15,7 @@ def _percentile(values, fraction: float):
 class OnlineMotionQuality:
     """Bounded motion, boundary, spatial, foot, and ground diagnostics."""
 
-    def __init__(self, fps: int = 30, sample_limit: int = 4096):
+    def __init__(self, fps: int = 30, sample_limit: int = 32768):
         self.fps = fps
         self.sample_limit = sample_limit
         self.root_step = deque(maxlen=sample_limit)
@@ -62,8 +62,11 @@ class OnlineMotionQuality:
         )
 
         feet = companion[[7, 8, 10, 11]]
+        observed_ground = float(np.min(lead[[7, 8, 10, 11], 2]))
         if self._ground_z is None:
-            self._ground_z = float(np.min(feet[:, 2]))
+            self._ground_z = observed_ground
+        else:
+            self._ground_z = min(self._ground_z, observed_ground)
         self.ground_penetration.append(
             float(max(0.0, self._ground_z - float(np.min(feet[:, 2]))))
         )

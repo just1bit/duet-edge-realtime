@@ -22,6 +22,14 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(len(metrics.windows), 256)
         self.assertEqual(len(metrics.inference_wall_ms), 4096)
         self.assertEqual(len(metrics.jitter_ms), 4096)
+        self.assertEqual(len(metrics.resource_samples), 0)
+
+    def test_resource_sampler_retains_a_full_ten_minute_run(self):
+        metrics = RunMetrics("test")
+        for index in range(9000):
+            metrics.record_resource_sample({"wall_time_s": float(index)})
+        self.assertEqual(len(metrics.resource_samples), 8192)
+        self.assertEqual(metrics.resource_samples[0]["wall_time_s"], 808.0)
 
     def test_summary_reports_cuda_latency_percentiles(self):
         metrics = RunMetrics("test")

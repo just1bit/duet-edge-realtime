@@ -5,6 +5,7 @@ const state = {
   parents: [], ws: null, mode: 'live', completed: false, running: false, hasLiveFrame: false, retry: 0, retryTimer: null,
   fps: 30, frame: null, replay: [], replayIndex: 0, playhead: 0, paused: false,
   lastTick: performance.now(), yaw: -.42, dragging: false, pointerX: 0,
+  telemetryAt: performance.now(), renderedFrames: 0, visibleStalls: 0,
 };
 
 function status(text, tone = 'waiting') {
@@ -64,8 +65,8 @@ function draw(frame) {
   const companion = frame?.companion_joints || frame?.joints;
   if (!lead || !companion) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawSkeleton(lead, canvas.width * .25, '#6ca9ff');
-  drawSkeleton(companion, canvas.width * .75, '#61e6c8');
+  drawSkeleton(lead, canvas.width * .3, '#6ca9ff');
+  drawSkeleton(companion, canvas.width * .7, '#61e6c8');
   state.frame = frame;
   $('empty-state').classList.add('hidden');
   $('frame').textContent = `${frame.frame_id ?? frame.seq ?? '—'} · ${frame.clip_id || 'timeline'}`;
@@ -233,8 +234,28 @@ window.onpointerup = () => {
 };
 
 function tick(now) {
-  const elapsed = Math.min(.1, (now - state.lastTick) / 1000);
+  const rawElapsed = (now - state.lastTick) / 1000;
+  const elapsed = Math.min(.1, rawElapsed);
   state.lastTick = now;
+  state.renderedFrames += 1;
+  if (state.mode === 'live' && state.running && rawElapsed > .1) state.visibleStalls += 1;
+  const telemetryElapsed = now - state.telemetryAt;
+  if (
+    state.mode === 'live' && state.frame && telemetryElapsed >= 1000
+    && state.ws?.readyState === WebSocket.OPEN
+  ) {
+    state.ws.send(JSON.stringify({
+      type: 'client_metrics',
+      render_fps: state.renderedFrames * 1000 / telemetryElapsed,
+      frame_age_ms: Number.isFinite(state.frame.emitted_wall_time_s)
+        ? Math.max(0, Date.now() - state.frame.emitted_wall_time_s * 1000)
+        : null,
+      visible_stalls: state.visibleStalls,
+    }));
+    state.telemetryAt = now;
+    state.renderedFrames = 0;
+    state.visibleStalls = 0;
+  }
   if (state.mode === 'live' && state.running && state.frame) $('age').textContent = frameAge(state.frame);
   if (state.mode === 'replay' && !state.paused && state.replay.length) {
     state.playhead += elapsed * state.fps;

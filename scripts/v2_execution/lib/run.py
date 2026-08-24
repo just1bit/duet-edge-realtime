@@ -423,9 +423,17 @@ def command_report(args) -> None:
         checks["ten_minute_duration"] = len(frames) >= 18000 and duration_s >= 600
     if args.long_input:
         checks["long_input_backend_cuda"] = backend == "cuda"
-        checks["viewer_connected"] = summary.get("clients", {}).get("peak_connected", 0) >= 1
+        clients = summary.get("clients", {})
+        checks["viewer_connected"] = clients.get("peak_connected", 0) >= 1
         checks["viewer_zero_drops"] = summary.get("output", {}).get("dropped_view_frames") == 0
-        checks["browser_zero_stalls"] = summary.get("clients", {}).get("visible_stalls") == 0
+        telemetry_present = (
+            clients.get("render_fps_p50") is not None
+            and clients.get("frame_age_p95_ms") is not None
+        )
+        checks["viewer_telemetry"] = telemetry_present
+        checks["browser_zero_stalls"] = (
+            telemetry_present and clients.get("visible_stalls") == 0
+        )
     passed = all(checks.values())
     result = {"passed": passed, "backend": backend, "frames": len(frames), "duration_s": duration_s, "checks": checks}
     write_json(run / "gate-results.json", result)

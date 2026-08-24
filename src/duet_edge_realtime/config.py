@@ -37,11 +37,17 @@ class ContinuityConfig:
     causal_overlap: bool = True
     relative_root_correction: bool = True
     robust_filter_z: float = 6.0
+    relative_root_soft_knee: float = 0.8
+    relative_root_softness: float = 0.2
     diagnostic_sample_limit: int = 32
 
     def __post_init__(self) -> None:
         if self.robust_filter_z <= 0:
             raise ValueError("continuity.robust_filter_z must be positive")
+        if self.relative_root_soft_knee < 0:
+            raise ValueError("continuity.relative_root_soft_knee must be non-negative")
+        if self.relative_root_softness <= 0:
+            raise ValueError("continuity.relative_root_softness must be positive")
         if self.diagnostic_sample_limit < 1:
             raise ValueError("continuity.diagnostic_sample_limit must be positive")
 
