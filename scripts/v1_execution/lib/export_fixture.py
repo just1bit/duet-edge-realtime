@@ -14,6 +14,7 @@ from duet_edge_realtime.backends.duet_edge import CudaDuetEdgeBackend
 from duet_edge_realtime.backends.recorded import GOLDEN_SCHEMA, RecordedInferenceBackend
 from duet_edge_realtime.continuity import OnlineContinuityProcessor, direct_fk
 from duet_edge_realtime.input_adapters import AISTFileReplayAdapter
+from duet_edge_realtime.progress import TerminalProgress
 from duet_edge_realtime.schemas import MotionWindow
 
 
@@ -60,9 +61,11 @@ def main() -> None:
     parser.add_argument("--guidance-music", type=float, default=0.0)
     parser.add_argument("--guidance-lead", type=float, default=2.0)
     parser.add_argument("--eta", type=float, default=1.0)
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
     if args.windows < 2:
         parser.error("--windows must be at least 2")
+    progress = TerminalProgress(args.progress)
 
     backend = CudaDuetEdgeBackend(
         args.checkpoint,
@@ -71,9 +74,11 @@ def main() -> None:
         guidance_lead=args.guidance_lead,
         sampling_steps=args.steps,
         eta=args.eta,
+        progress_callback=progress.model_update if args.progress else None,
     )
     backend.warmup()
     backend.start_session("fixture-export")
+    backend.set_inference_total_windows(args.windows)
     try:
         adapter = AISTFileReplayAdapter(
             args.motion,
@@ -177,7 +182,6 @@ def main() -> None:
             normalizer_min=minimum,
             metadata_json=json.dumps(metadata),
         )
-
         replay = RecordedInferenceBackend(golden_target)
         replay.warmup()
         try:

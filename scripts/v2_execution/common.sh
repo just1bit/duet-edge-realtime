@@ -9,54 +9,54 @@ STATE_FILE="${REALTIME_ROOT}/outputs/.run-current"
 
 STAGE_NUMBER=""
 STAGE_TITLE=""
-STAGE_TOTAL=0
-STAGE_CURRENT=0
 STAGE_FINISHED=0
 
-progress_bar() {
-  local current="$1" total="$2" label="$3" width=28 filled empty percent
-  local filled_bar empty_bar
-  if (( total <= 0 )); then
-    printf '[............................]  --%%  %s\n' "${label}"
-    return
+stage_capture() {
+  local number="$1" run="" status
+  shift
+  local original_args=("$@")
+  [[ "${STAGE_CAPTURE_ACTIVE:-0}" != "1" ]] || return 0
+  local capture_args=(--stage "${number}" --state-file "${STATE_FILE}")
+  if [[ "${number}" != "01" ]]; then
+    while [[ $# -gt 0 ]]; do
+      case "$1" in --run) run="$2"; shift 2 ;; *) shift ;; esac
+    done
+    load_run "${run}"
+    capture_args+=(--run-root "${RUN_ROOT}")
   fi
-  percent=$((current * 100 / total))
-  filled=$((current * width / total))
-  empty=$((width - filled))
-  printf -v filled_bar '%*s' "${filled}" ''
-  printf -v empty_bar '%*s' "${empty}" ''
-  filled_bar="${filled_bar// /=}"
-  empty_bar="${empty_bar// /.}"
-  printf '[%s%s] %3d%%  %s\n' "${filled_bar}" "${empty_bar}" "${percent}" "${label}"
+  set +e
+  STAGE_CAPTURE_ACTIVE=1 "${PYTHON_BIN}" \
+    "${V2_SCRIPT_DIR}/lib/capture_stage.py" "${capture_args[@]}" -- \
+    bash "$0" "${original_args[@]}"
+  status="$?"
+  set -e
+  exit "${status}"
 }
 
 stage_begin() {
   STAGE_NUMBER="$1"
   STAGE_TITLE="$2"
-  STAGE_TOTAL="$3"
-  STAGE_CURRENT=0
   STAGE_FINISHED=0
   printf '\nStage %s · %s\n' "${STAGE_NUMBER}" "${STAGE_TITLE}"
-  progress_bar 0 "${STAGE_TOTAL}" "Ready to start"
   trap 'stage_finish $?' EXIT
 }
 
 stage_step() {
-  STAGE_CURRENT=$((STAGE_CURRENT + 1))
-  progress_bar "${STAGE_CURRENT}" "${STAGE_TOTAL}" "$1"
+  printf '  - %s\n' "$1"
 }
 
 stage_finish() {
   local status="$1"
+  local message
   (( STAGE_FINISHED == 0 )) || return
   STAGE_FINISHED=1
   trap - EXIT
   if (( status == 0 )); then
-    STAGE_CURRENT="${STAGE_TOTAL}"
-    printf 'Stage %s SUCCESS · %s\n' "${STAGE_NUMBER}" "${STAGE_TITLE}"
+    message="Stage ${STAGE_NUMBER} SUCCESS · ${STAGE_TITLE}"
+    printf '%s\n' "${message}"
   else
-    printf 'Stage %s FAILED · %s (exit code %s)\n' \
-      "${STAGE_NUMBER}" "${STAGE_TITLE}" "${status}" >&2
+    message="Stage ${STAGE_NUMBER} FAILED · ${STAGE_TITLE} (exit code ${status})"
+    printf '%s\n' "${message}" >&2
   fi
 }
 

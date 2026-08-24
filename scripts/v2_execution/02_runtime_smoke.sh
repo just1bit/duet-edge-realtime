@@ -2,7 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
-stage_begin "02" "Runtime Check and Smoke Test" 6
+stage_capture "02" "$@"
+stage_begin "02" "Runtime Check and Smoke Test"
 run_arg "$@"
 "${PYTHON_BIN}" -m pytest -q
 stage_step "Automated tests passed"
@@ -19,7 +20,7 @@ if [[ "${backend}" == "cuda" && ! -f "${RUN_ROOT}/evidence/smoke-runs/cuda-smoke
     --input "${PROJECT_ROOT}/data+checkpoint/smoke_input/smoke_input.pkl" \
     --input-format aist --root-scaled false --sampling-steps 5 \
     --output-dir "${RUN_ROOT}/evidence/smoke-runs" --run-id cuda-smoke \
-    --clock virtual --sink ndjson
+    --clock virtual --sink ndjson --progress
 fi
 stage_step "Backend smoke run completed"
 "${PYTHON_BIN}" - "${RUN_ROOT}/config.json" <<'PY'

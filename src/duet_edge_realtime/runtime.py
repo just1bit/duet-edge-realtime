@@ -82,6 +82,12 @@ class RuntimeDaemon:
         self.shutdown_event = asyncio.Event()
 
     def status(self) -> dict:
+        model_progress = (
+            self.backend.progress_snapshot()
+            if self.backend is not None
+            and hasattr(self.backend, "progress_snapshot")
+            else None
+        )
         progress = None
         if self.active_service is not None:
             total_frames = None
@@ -98,12 +104,17 @@ class RuntimeDaemon:
                 "output_frames": self.active_service.metrics.output_frames,
                 "total_frames": total_frames,
                 "inference_windows": self.active_service.metrics.inference_count,
+                "sampling": model_progress,
             }
         return {
             "ok": self.error is None,
             "run_id": self.run_id,
             "config_sha256": self.config_sha256,
-            "model": {"state": self.model_state, "warmup_ms": self.warmup_ms},
+            "model": {
+                "state": self.model_state,
+                "warmup_ms": self.warmup_ms,
+                "progress": model_progress,
+            },
             "stream": {"state": self.stream_state},
             "viewer": {
                 "state": self.viewer_state,
@@ -351,6 +362,14 @@ class RuntimeDaemon:
                 )
             else:
                 raise RuntimeError(f"unknown input format {manifest['input_format']!r}")
+            source_frames = len(source.motion) * source.loop
+            total_windows = 1 + max(
+                0,
+                (source_frames - config.window_frames + config.hop_frames - 1)
+                // config.hop_frames,
+            )
+            if hasattr(self.backend, "set_inference_total_windows"):
+                self.backend.set_inference_total_windows(total_windows)
             session_sink = CompositeSink([
                 NDJSONSink(self.run_dir / "stream.ndjson"),
                 SessionViewerSink(self.websocket_sink),

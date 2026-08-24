@@ -4,6 +4,7 @@ import hashlib
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -21,6 +22,7 @@ class CudaDuetEdgeBackend(InferenceBackend):
         guidance_lead: float = 2.0,
         sampling_steps: int = 50,
         eta: float = 1.0,
+        progress_callback: Callable[[dict], None] | None = None,
     ):
         self.checkpoint = Path(checkpoint).resolve()
         self.engine_root = Path(duet_edge_root).resolve()
@@ -36,6 +38,12 @@ class CudaDuetEdgeBackend(InferenceBackend):
         self._previous_clean_tail = None
         self._session_id: str | None = None
         self._handoff_resets = 0
+        self._progress_callback = progress_callback
+        self._progress_context = {"phase": "idle", "window": 0, "windows": 0}
+        self._progress = {
+            "phase": "idle", "window": 0, "windows": 0,
+            "step": 0, "steps": self.sampling_steps,
+        }
 
     def warmup(self) -> None:
         if not self.checkpoint.is_file():
@@ -71,6 +79,9 @@ class CudaDuetEdgeBackend(InferenceBackend):
         identity = np.tile(np.asarray([1, 0, 0, 0, 1, 0], dtype=np.float32), 24)
         zeros[:, 7:] = identity
         for warmup_index in range(3):
+            self._progress_context = {
+                "phase": "warmup", "window": warmup_index + 1, "windows": 3,
+            }
             self.reset_session("warmup-window")
             self.infer(
                 MotionWindow(
@@ -91,6 +102,9 @@ class CudaDuetEdgeBackend(InferenceBackend):
         if self.edge is None or self.torch is None:
             raise RuntimeError("warmup() must be called before infer()")
         torch = self.torch
+        if self._progress_context["phase"] == "inference":
+            self._progress_context["window"] = window.window_id + 1
+        self._report_progress(0)
         device = self.edge.accelerator.device
         torch.manual_seed(window.seed)
         torch.cuda.manual_seed_all(window.seed)
@@ -162,6 +176,7 @@ class CudaDuetEdgeBackend(InferenceBackend):
             )
             if next_time < 0:
                 x = x_start
+                self._report_progress(step_index + 1)
                 continue
             alpha = diffusion.alphas_cumprod[current]
             alpha_next = diffusion.alphas_cumprod[next_time]
@@ -177,6 +192,7 @@ class CudaDuetEdgeBackend(InferenceBackend):
             copy_started = time.perf_counter()
             next_state[next_time] = x[:, 75:].detach().clone()
             copy_ms += (time.perf_counter() - copy_started) * 1000.0
+            self._report_progress(step_index + 1)
 
         disagreement = None
         if self._previous_clean_tail is not None:
@@ -227,6 +243,26 @@ class CudaDuetEdgeBackend(InferenceBackend):
     def start_session(self, session_id: str) -> None:
         self.reset_session("session-start")
         self._session_id = session_id
+        self._progress_context["phase"] = "inference"
+
+    def set_inference_total_windows(self, total: int) -> None:
+        self._progress_context = {
+            "phase": "inference", "window": 0, "windows": max(0, int(total)),
+        }
+
+    def progress_snapshot(self) -> dict:
+        return dict(self._progress)
+
+    def _report_progress(self, step: int) -> None:
+        context = self._progress_context
+        self._progress = {
+            **context,
+            "step": max(0, min(int(step), self.sampling_steps)),
+            "steps": self.sampling_steps,
+        }
+        callback = self._progress_callback
+        if callback is not None:
+            callback(dict(self._progress))
 
     def reset_session(self, reason: str = "explicit") -> None:
         self._handoff = {}

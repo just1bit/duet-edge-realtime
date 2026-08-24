@@ -2,9 +2,10 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
+stage_capture "10" "$@"
 run=""
 while [[ $# -gt 0 ]]; do case "$1" in --run) run="$2";shift 2;; *) shift;; esac; done
-stage_begin "10" "Export Regression Fixtures" 4
+stage_begin "10" "Export Regression Fixtures"
 load_run "${run}"
 if [[ -f "${RUN_ROOT}/runtime.pid" ]] && kill -0 "$(runtime_pid)" 2>/dev/null; then
   "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" shutdown
@@ -23,7 +24,8 @@ stage_step "Model and input identities resolved"
 "${PYTHON_BIN}" scripts/v1_execution/lib/export_fixture.py \
   --checkpoint "${checkpoint}" --duet-edge-root "${engine}" --motion "${motion}" \
   --root-scaled "${root_scaled}" --output "${RUN_ROOT}/fixtures/fixture.npz" \
-  --golden-output "${RUN_ROOT}/fixtures/recorded_fixture.npz" --windows 3 --steps 50
+  --golden-output "${RUN_ROOT}/fixtures/recorded_fixture.npz" --windows 3 --steps 50 \
+  --progress
 stage_step "Fixture data exported"
 test -f "${RUN_ROOT}/fixtures/fixture.npz"
 test -f "${RUN_ROOT}/fixtures/recorded_fixture.npz"

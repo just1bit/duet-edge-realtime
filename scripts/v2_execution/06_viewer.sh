@@ -2,8 +2,9 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
+stage_capture "06" "$@"
 action="${1:-status}"; shift || true
-stage_begin "06" "Viewer Web · ${action}" 3
+stage_begin "06" "Viewer Web · ${action}"
 run_arg "$@"
 case "${action}" in
   start)

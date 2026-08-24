@@ -24,6 +24,7 @@ from .lifecycle import Lifecycle, ServiceState
 from .metrics import RunMetrics
 from .motion_quality import OnlineMotionQuality
 from .playout import RealtimeClock, VirtualClock
+from .progress import TerminalProgress
 from .sinks import CompositeSink, NDJSONSink, StaticWebSink, WebSocketSink
 from .skeleton import JOINT_NAMES, PARENTS
 from .schemas import PROTOCOL_NAME, SCHEMA_VERSION
@@ -648,10 +649,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sampling-steps", type=int)
     parser.add_argument("--playout-delay-s", type=float)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--progress", action="store_true",
+        help="show model warmup and inference-window progress",
+    )
     return parser.parse_args()
 
 
 async def _async_main(args: argparse.Namespace) -> None:
+    progress = TerminalProgress(args.progress)
     config = RealtimeConfig.load(args.config)
     backend_name = args.backend or config.backend
     model = config.model
@@ -738,6 +744,7 @@ async def _async_main(args: argparse.Namespace) -> None:
             guidance_lead=config.guidance_lead,
             sampling_steps=config.sampling_steps,
             eta=config.eta,
+            progress_callback=progress.model_update if args.progress else None,
         )
 
     sink_names = {name.strip() for name in args.sink.split(",") if name.strip()}
@@ -825,6 +832,14 @@ async def _async_main(args: argparse.Namespace) -> None:
         )
         raise
     service.source = source
+    source_frames = len(source.motion) * source.loop
+    total_windows = 1 + max(
+        0,
+        (source_frames - config.window_frames + config.hop_frames - 1)
+        // config.hop_frames,
+    )
+    if hasattr(backend, "set_inference_total_windows"):
+        backend.set_inference_total_windows(total_windows)
     service.metrics.model_load_warmup_ms = warmup_ms
     LOG.info(
         "run_id=%s backend=%s input=%s output=%s",

@@ -2,7 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
-stage_begin "01" "Initialize / Resume Run" 2
+stage_capture "01" "$@"
+stage_begin "01" "Initialize / Resume Run"
 if [[ "${1:-}" == "--resume" ]]; then
   "${PYTHON_BIN}" scripts/v2_execution/lib/run.py init --resume "$2"
 else

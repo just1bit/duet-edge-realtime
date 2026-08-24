@@ -9,40 +9,70 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from duet_edge_realtime.progress import TerminalProgress
+
 
 def draw_wait_progress(
     elapsed: float,
-    timeout: float,
     label: str,
     final: bool = False,
     ratio: float | None = None,
+    emit_non_tty: bool = False,
 ) -> None:
     """Render one stable wait line instead of dumping every polled status event."""
     width = 28
     measured_progress = ratio is not None
-    ratio = 1.0 if final else (
-        min(1.0, elapsed / timeout) if ratio is None and timeout > 0 else (ratio or 0.0)
-    )
-    filled = min(width, int(width * ratio))
-    bar = "=" * filled + "." * (width - filled)
+    if final and measured_progress:
+        ratio = 1.0
+        bar = "=" * width
+        percent = "100%"
+    elif final:
+        bar = ""
+        percent = ""
+    elif measured_progress:
+        ratio = ratio or 0.0
+        filled = min(width, int(width * ratio))
+        bar = "=" * filled + "." * (width - filled)
+        percent = f"{ratio * 100:3.0f}%"
+    else:
+        bar = ""
+        percent = ""
     suffix = (
         "ready" if final
-        else f"{elapsed:5.1f}s elapsed" if measured_progress
-        else f"{elapsed:5.1f}s / {timeout:.0f}s"
+        else f"{elapsed:5.1f}s elapsed"
     )
-    line = f"[{bar}] {ratio * 100:3.0f}%  {label} · {suffix}"
+    line = (
+        f"[{bar}] {percent}  {label} · {suffix}"
+        if measured_progress
+        else f"{label} · {suffix}"
+    )
     if os.isatty(1):
-        print("\r" + line, end="\n" if final else "", flush=True)
-    elif final:
+        print("\r" + line.ljust(80), end="\n" if final else "", flush=True)
+    elif final or emit_non_tty:
         print(line)
 
 
 def session_ratio(status: dict) -> float | None:
-    progress = status.get("session", {}).get("progress", {})
+    progress = status.get("session", {}).get("progress") or {}
     current, total = progress.get("output_frames"), progress.get("total_frames")
     if isinstance(current, int) and isinstance(total, int) and total > 0:
         return min(1.0, current / total)
     return None
+
+
+def model_progress_event(status: dict, field: str) -> dict | None:
+    if field.startswith("model."):
+        event = status.get("model", {}).get("progress")
+    else:
+        session = status.get("session", {}).get("progress") or {}
+        event = session.get("sampling")
+    if not isinstance(event, dict):
+        return None
+    if event.get("phase") not in {"warmup", "inference"}:
+        return None
+    if not event.get("windows") or not event.get("steps"):
+        return None
+    return event
 
 
 def read_config(run: Path) -> dict:
@@ -113,14 +143,37 @@ def main() -> None:
     started = time.monotonic()
     deadline = started + args.timeout
     last = None
-    if os.isatty(1):
-        draw_wait_progress(0.0, args.timeout, args.label)
+    model_display = TerminalProgress(True)
+    last_model_key = None
+    last_non_tty_report = started
+    draw_wait_progress(
+        0.0, args.label, emit_non_tty=not os.isatty(1)
+    )
     while time.monotonic() < deadline:
+        active_model_event = None
         try:
             last = request(run, "GET", "/status")
+            event = model_progress_event(last, args.field)
+            event_key = (
+                event.get("phase"), event.get("window"), event.get("step")
+            ) if event else None
+            event_changed = event is not None and event_key != last_model_key
+            if event is not None and (os.isatty(1) or event_changed):
+                model_display.model_update(event, force=True)
+                last_model_key = event_key
+            event_complete = event is not None and (
+                event.get("window") == event.get("windows")
+                and event.get("step") == event.get("steps")
+            )
+            active_model_event = event if not event_complete or event_changed else None
             current = str(nested(last, args.field))
             if current == args.value:
-                draw_wait_progress(time.monotonic() - started, args.timeout, args.label, final=True)
+                draw_wait_progress(
+                    time.monotonic() - started,
+                    args.label,
+                    final=True,
+                    ratio=session_ratio(last),
+                )
                 return
             if current in args.fail_value:
                 detail = last.get("error") or last.get("session", {}).get("error")
@@ -135,13 +188,24 @@ def main() -> None:
                     os.kill(int(pid_path.read_text().strip()), 0)
                 except (ProcessLookupError, ValueError):
                     raise SystemExit("Runtime process exited before reaching the requested state.")
-        if os.isatty(1):
+        if os.isatty(1) and active_model_event is None:
             draw_wait_progress(
                 time.monotonic() - started,
-                args.timeout,
                 args.label,
                 ratio=session_ratio(last or {}),
             )
+        elif (
+            not os.isatty(1)
+            and active_model_event is None
+            and time.monotonic() - last_non_tty_report >= 10.0
+        ):
+            draw_wait_progress(
+                time.monotonic() - started,
+                args.label,
+                ratio=session_ratio(last or {}),
+                emit_non_tty=True,
+            )
+            last_non_tty_report = time.monotonic()
         time.sleep(args.interval)
     raise SystemExit(
         f"Timed out waiting for {args.field}={args.value}: "

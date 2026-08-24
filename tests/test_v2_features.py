@@ -1,5 +1,6 @@
 import asyncio
 import json
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,33 @@ from duet_edge_realtime.sinks import StaticWebSink
 
 
 class V2FeatureTests(unittest.TestCase):
+    def test_runtime_client_accepts_null_session_progress(self):
+        client = runpy.run_path(str(
+            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+        ))
+        self.assertIsNone(client["session_ratio"]({
+            "session": {"progress": None},
+        }))
+
+    def test_cuda_backend_reports_real_window_and_sampling_progress(self):
+        events = []
+        backend = CudaDuetEdgeBackend(
+            "checkpoint.pt", ".", sampling_steps=50,
+            progress_callback=events.append,
+        )
+        backend.set_inference_total_windows(10)
+        backend.start_session("formal")
+        backend._progress_context["window"] = 4
+        backend._report_progress(28)
+        self.assertEqual(events[-1], {
+            "phase": "inference",
+            "window": 4,
+            "windows": 10,
+            "step": 28,
+            "steps": 50,
+        })
+        self.assertEqual(backend.progress_snapshot(), events[-1])
+
     def test_handoff_metadata_validation(self):
         backend = CudaDuetEdgeBackend("checkpoint.pt", ".", sampling_steps=50)
         schedule = ((999, 978), (978, 958))

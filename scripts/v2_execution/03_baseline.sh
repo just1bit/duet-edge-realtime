@@ -2,7 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 source "${SCRIPT_DIR}/common.sh"
-stage_begin "03" "Baseline and Automatic Configuration" 3
+stage_capture "03" "$@"
+stage_begin "03" "Baseline and Automatic Configuration"
 run_arg "$@"
 backend="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["backend"])' "${RUN_ROOT}/config.json")"
 baseline_root="${RUN_ROOT}/evidence/baseline-runs"
@@ -16,7 +17,7 @@ if [[ ! -f "${baseline_root}/baseline/summary.json" ]]; then
   "${PYTHON_BIN}" -m duet_edge_realtime.service \
     --config "${RUN_ROOT}/config.json" --output-dir "${baseline_root}" \
     --run-id baseline --clock realtime --sink ndjson \
-    --loop 1 "${input_args[@]}"
+    --loop 1 --progress "${input_args[@]}"
 fi
 stage_step "Quality baseline completed"
 timing_summary="${baseline_root}/baseline/summary.json"
@@ -26,7 +27,7 @@ if [[ "${baseline_loops}" -gt 1 ]]; then
     "${PYTHON_BIN}" -m duet_edge_realtime.service \
       --config "${RUN_ROOT}/config.json" --output-dir "${baseline_root}" \
       --run-id timing-baseline --clock realtime --sink ndjson \
-      --loop "${baseline_loops}" "${input_args[@]}"
+      --loop "${baseline_loops}" --progress "${input_args[@]}"
   fi
 fi
 stage_step "Timing baseline completed"
