@@ -1,10 +1,17 @@
 import asyncio
+import io
 import json
+import os
 import runpy
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from duet_edge_realtime.backends.duet_edge import CudaDuetEdgeBackend
 from duet_edge_realtime.motion_quality import OnlineMotionQuality
@@ -12,6 +19,85 @@ from duet_edge_realtime.sinks import StaticWebSink
 
 
 class V2FeatureTests(unittest.TestCase):
+    def test_stage_capture_mirrors_both_streams_and_preserves_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            result = subprocess.run([
+                sys.executable,
+                str(Path(__file__).parents[1] /
+                    "scripts/v2_execution/lib/capture_stage.py"),
+                "--stage", "05", "--run-root", str(run),
+                "--state-file", str(run / "state"), "--",
+                sys.executable, "-c",
+                "import sys; print('out'); print('err', file=sys.stderr); sys.exit(37)",
+            ], text=True, capture_output=True, check=False)
+            log = (run / "logs/stage-05.log").read_text(encoding="utf-8")
+            self.assertEqual(result.returncode, 37)
+            self.assertIn("out", result.stdout)
+            self.assertIn("err", result.stdout)
+            self.assertIn("out", log)
+            self.assertIn("err", log)
+
+    def test_stage_capture_log_failure_does_not_block_stage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            (run / "logs/stage-05.log").mkdir(parents=True)
+            marker = run / "stage-ran"
+            result = subprocess.run([
+                sys.executable,
+                str(Path(__file__).parents[1] /
+                    "scripts/v2_execution/lib/capture_stage.py"),
+                "--stage", "05", "--run-root", str(run),
+                "--state-file", str(run / "state"), "--",
+                sys.executable, "-c",
+                f"from pathlib import Path; Path({str(marker)!r}).touch()",
+            ], text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(marker.is_file())
+            self.assertIn("continuing without archival", result.stderr)
+
+    def test_stage_one_log_moves_into_new_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run = root / "run"
+            state = root / "state"
+            child = (
+                "from pathlib import Path; "
+                f"run=Path({str(run)!r}); run.mkdir(); "
+                f"Path({str(state)!r}).write_text(str(run)); print('initialized')"
+            )
+            result = subprocess.run([
+                sys.executable,
+                str(Path(__file__).parents[1] /
+                    "scripts/v2_execution/lib/capture_stage.py"),
+                "--stage", "01", "--state-file", str(state), "--",
+                sys.executable, "-c", child,
+            ], text=True, capture_output=True, check=False)
+            log = run / "logs/stage-01.log"
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(log.is_file())
+            self.assertIn("initialized", log.read_text(encoding="utf-8"))
+
+    def test_model_stage_continues_when_runtime_log_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            (run / "logs/runtime.log").mkdir(parents=True)
+            (run / "config.json").touch()
+            (run / "config.sha256").touch()
+            environment = os.environ.copy()
+            environment.update({
+                "STAGE_CAPTURE_ACTIVE": "1",
+                "PYTHON_BIN": shutil.which("true") or "/usr/bin/true",
+            })
+            result = subprocess.run([
+                "bash",
+                str(Path(__file__).parents[1] / "scripts/v2_execution/04_model.sh"),
+                "start", "--run", str(run),
+            ], text=True, capture_output=True, check=False, env=environment)
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue((run / "runtime.pid").is_file())
+            self.assertIn("continuing without archival", result.stderr)
+
     def test_runtime_client_accepts_null_session_progress(self):
         client = runpy.run_path(str(
             Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
@@ -19,6 +105,54 @@ class V2FeatureTests(unittest.TestCase):
         self.assertIsNone(client["session_ratio"]({
             "session": {"progress": None},
         }))
+
+    def test_runtime_client_flushes_waits_and_falls_back_to_model_progress(self):
+        client = runpy.run_path(str(
+            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+        ))
+        event = {
+            "phase": "inference", "window": 2, "windows": 8,
+            "step": 17, "steps": 50,
+        }
+        status = {
+            "model": {"progress": event},
+            "session": {"progress": None},
+        }
+        self.assertEqual(
+            client["model_progress_event"](status, "session.state"), event
+        )
+        with patch.object(client["os"], "isatty", return_value=False), \
+                patch("builtins.print") as output:
+            client["draw_wait_progress"](
+                5.0, "Realtime inference and playout", emit_non_tty=True
+            )
+        self.assertTrue(output.call_args.kwargs["flush"])
+
+    def test_runtime_wait_can_restore_final_status_json_without_extra_request(self):
+        client = runpy.run_path(str(
+            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+        ))
+        status = {
+            "model": {"state": "ready", "progress": None},
+            "session": {"state": "idle", "progress": None},
+        }
+        requests = []
+
+        def request(*args):
+            requests.append(args)
+            return status
+
+        client["main"].__globals__["request"] = request
+        output = io.StringIO()
+        argv = [
+            "runtime_client.py", "--run", "/tmp/run", "wait",
+            "--field", "model.state", "--value", "ready",
+            "--timeout", "1", "--show-final-status",
+        ]
+        with patch.object(sys, "argv", argv), redirect_stdout(output):
+            client["main"]()
+        self.assertEqual(len(requests), 1)
+        self.assertIn('"state": "ready"', output.getvalue())
 
     def test_cuda_backend_reports_real_window_and_sampling_progress(self):
         events = []

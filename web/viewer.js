@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 const state = {
-  parents: [], ws: null, mode: 'live', ended: false, retry: 0, retryTimer: null,
+  parents: [], ws: null, mode: 'live', completed: false, running: false, hasLiveFrame: false, retry: 0, retryTimer: null,
   fps: 30, frame: null, replay: [], replayIndex: 0, playhead: 0, paused: false,
   lastTick: performance.now(), yaw: -.42, dragging: false, pointerX: 0,
 };
@@ -22,7 +22,7 @@ function clearViewer() {
   state.frame = null;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   $('empty-state').classList.remove('hidden');
-  ['frame', 'age', 'e2e', 'p95', 'delivery'].forEach(id => $(id).textContent = '—');
+  ['frame', 'stream-time', 'age', 'e2e', 'p95', 'delivery'].forEach(id => $(id).textContent = '—');
 }
 
 function project(point, centerX) {
@@ -69,6 +69,7 @@ function draw(frame) {
   state.frame = frame;
   $('empty-state').classList.add('hidden');
   $('frame').textContent = `${frame.frame_id ?? frame.seq ?? '—'} · ${frame.clip_id || 'timeline'}`;
+  $('stream-time').textContent = formatStreamTime(frame);
   $('age').textContent = state.mode === 'live' ? frameAge(frame) : 'Local replay';
   $('e2e').textContent = frame.end_to_end_latency_ms == null ? '—' : `${frame.end_to_end_latency_ms.toFixed(1)} ms`;
 }
@@ -79,30 +80,64 @@ function frameAge(frame) {
     : '—';
 }
 
+function formatStreamTime(frame) {
+  const frameId = frame.frame_id ?? frame.seq;
+  const seconds = frame.source_time_s ?? frame.motion_time_s ??
+    (frameId == null ? null : frameId / state.fps);
+  if (!Number.isFinite(seconds)) return '—';
+  const whole = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor(whole % 3600 / 60);
+  const secs = whole % 60;
+  return [hours, minutes, secs].map(value => String(value).padStart(2, '0')).join(':');
+}
+
 function handle(message) {
   if (message.type === 'hello') {
     state.parents = message.parents || [];
     state.fps = message.fps || 30;
   } else if (message.type === 'state') {
     const label = {starting:'Starting', buffering:'Buffering', playing:'Live', draining:'Finishing', finished:'Completed', failed:'Failed'}[message.state];
+    state.running = message.state === 'playing' || message.state === 'draining';
+    if (message.state === 'finished' && !state.hasLiveFrame) {
+      state.completed = false;
+      status('Waiting for stream');
+      return;
+    }
+    if (message.state === 'finished') state.completed = true;
+    else if (message.state !== 'failed') state.completed = false;
     status(label || message.state, message.state === 'failed' ? 'offline' : 'online');
   } else if (message.type === 'frame') {
+    if (state.mode === 'live') {
+      state.running = true;
+      state.completed = false;
+      state.hasLiveFrame = true;
+    }
     draw(message);
   } else if (message.type === 'metrics') {
+    if (state.mode === 'live' && !state.hasLiveFrame) return;
     $('p95').textContent = message.inference_p95_ms == null ? '—' : `${message.inference_p95_ms.toFixed(1)} ms`;
     const jitter = message.jitter_p95_ms == null ? '—' : `${message.jitter_p95_ms.toFixed(1)} ms`;
     $('delivery').textContent = `${jitter} · ${message.dropped_view_frames ?? 0}`;
   } else if (message.type === 'eos') {
-    state.ended = true;
+    state.running = false;
+    if (!state.hasLiveFrame) {
+      state.completed = false;
+      status('Waiting for stream');
+      return;
+    }
+    state.completed = true;
     status('Stream completed', 'online');
   } else if (message.type === 'error') {
+    state.running = false;
+    state.completed = false;
     status('Stream failed', 'offline');
   }
 }
 
-function retryLater() {
+function retryLater(silent = false) {
   const delay = Math.min(10000, 700 * 2 ** state.retry++);
-  status('Waiting for stream');
+  if (!silent) status('Waiting for stream');
   state.retryTimer = setTimeout(() => connect(), delay);
 }
 
@@ -111,7 +146,9 @@ function connect(manual = false) {
   if (manual) state.retry = 0;
   const leavingReplay = state.mode === 'replay';
   mode('live');
-  state.ended = false;
+  state.running = false;
+  state.hasLiveFrame = false;
+  if (manual || leavingReplay) state.completed = false;
   if (leavingReplay) clearViewer();
   if (state.ws) {
     const old = state.ws;
@@ -122,18 +159,28 @@ function connect(manual = false) {
 
   const ws = new WebSocket($('ws-url').value.trim());
   state.ws = ws;
-  ws.onopen = () => { state.retry = 0; status('Connected · waiting for frames', 'online'); };
+  ws.onopen = () => {
+    state.retry = 0;
+    state.completed = false;
+    $('p95').textContent = '—';
+    $('delivery').textContent = '—';
+    status('Connected · waiting for frames', 'online');
+  };
   ws.onmessage = event => {
     try { handle(JSON.parse(event.data)); }
     catch (error) { console.warn('Invalid stream message', error); }
   };
   ws.onclose = () => {
-    if (state.ws === ws && state.mode === 'live' && !state.ended) retryLater();
+    state.running = false;
+    if (state.ws === ws && state.mode === 'live') retryLater(state.completed);
   };
 }
 
 async function openFile(file) {
   mode('replay');
+  state.running = false;
+  state.hasLiveFrame = false;
+  state.completed = false;
   clearTimeout(state.retryTimer);
   if (state.ws) state.ws.close();
   try {
@@ -188,7 +235,7 @@ window.onpointerup = () => {
 function tick(now) {
   const elapsed = Math.min(.1, (now - state.lastTick) / 1000);
   state.lastTick = now;
-  if (state.mode === 'live' && state.frame) $('age').textContent = frameAge(state.frame);
+  if (state.mode === 'live' && state.running && state.frame) $('age').textContent = frameAge(state.frame);
   if (state.mode === 'replay' && !state.paused && state.replay.length) {
     state.playhead += elapsed * state.fps;
     const index = Math.min(state.replay.length - 1, Math.floor(state.playhead));

@@ -11,7 +11,8 @@ case "${action}" in
     "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" start-stream
     stage_step "Start request accepted"
     "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" wait \
-      --field stream.state --value ready --timeout 30 --label "Preparing realtime stream service"
+      --field stream.state --value ready --timeout 30 \
+      --label "Preparing realtime stream service" --show-final-status
     stage_step "Realtime stream service ready"
     ;;
   status)

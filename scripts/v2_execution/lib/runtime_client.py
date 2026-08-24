@@ -49,7 +49,7 @@ def draw_wait_progress(
     if os.isatty(1):
         print("\r" + line.ljust(80), end="\n" if final else "", flush=True)
     elif final or emit_non_tty:
-        print(line)
+        print(line, flush=True)
 
 
 def session_ratio(status: dict) -> float | None:
@@ -63,12 +63,14 @@ def session_ratio(status: dict) -> float | None:
 def model_progress_event(status: dict, field: str) -> dict | None:
     if field.startswith("model."):
         event = status.get("model", {}).get("progress")
+        expected_phase = "warmup"
     else:
         session = status.get("session", {}).get("progress") or {}
-        event = session.get("sampling")
+        event = session.get("sampling") or status.get("model", {}).get("progress")
+        expected_phase = "inference"
     if not isinstance(event, dict):
         return None
-    if event.get("phase") not in {"warmup", "inference"}:
+    if event.get("phase") != expected_phase:
         return None
     if not event.get("windows") or not event.get("steps"):
         return None
@@ -123,6 +125,7 @@ def main() -> None:
     wait.add_argument("--timeout", type=float, required=True)
     wait.add_argument("--interval", type=float, default=1.0)
     wait.add_argument("--label", default="Waiting for runtime state")
+    wait.add_argument("--show-final-status", action="store_true")
     args = parser.parse_args()
     run = Path(args.run).resolve()
     endpoints = {
@@ -146,6 +149,8 @@ def main() -> None:
     model_display = TerminalProgress(True)
     last_model_key = None
     last_non_tty_report = started
+    last_poll_error = None
+    warned_old_runtime = False
     draw_wait_progress(
         0.0, args.label, emit_non_tty=not os.isatty(1)
     )
@@ -167,6 +172,18 @@ def main() -> None:
             )
             active_model_event = event if not event_complete or event_changed else None
             current = str(nested(last, args.field))
+            if (
+                not args.field.startswith("model.")
+                and current in {"preparing", "starting", "running"}
+                and "progress" not in last.get("model", {})
+                and not warned_old_runtime
+            ):
+                print(
+                    "Sampling progress is unavailable from the resident runtime; "
+                    "restart Stage 04 after this run to load the current runtime code.",
+                    flush=True,
+                )
+                warned_old_runtime = True
             if current == args.value:
                 draw_wait_progress(
                     time.monotonic() - started,
@@ -174,6 +191,8 @@ def main() -> None:
                     final=True,
                     ratio=session_ratio(last),
                 )
+                if args.show_final_status:
+                    print(json.dumps(last, indent=2), flush=True)
                 return
             if current in args.fail_value:
                 detail = last.get("error") or last.get("session", {}).get("error")
@@ -181,7 +200,9 @@ def main() -> None:
                     f"{args.label} failed: {args.field}={current}"
                     + (f" · {detail}" if detail else "")
                 )
-        except (OSError, RuntimeError, KeyError):
+            last_poll_error = None
+        except (OSError, RuntimeError, KeyError) as exc:
+            last_poll_error = str(exc)
             pid_path = run / "runtime.pid"
             if pid_path.is_file():
                 try:
@@ -197,11 +218,14 @@ def main() -> None:
         elif (
             not os.isatty(1)
             and active_model_event is None
-            and time.monotonic() - last_non_tty_report >= 10.0
+            and time.monotonic() - last_non_tty_report >= 5.0
         ):
             draw_wait_progress(
                 time.monotonic() - started,
-                args.label,
+                (
+                    f"{args.label} (retrying status: {last_poll_error})"
+                    if last_poll_error else args.label
+                ),
                 ratio=session_ratio(last or {}),
                 emit_non_tty=True,
             )

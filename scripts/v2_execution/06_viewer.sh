@@ -11,7 +11,8 @@ case "${action}" in
     "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" start-viewer
     stage_step "Viewer start request accepted"
     "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" wait \
-      --field viewer.state --value ready --timeout 30 --label "Starting Viewer Web"
+      --field viewer.state --value ready --timeout 30 \
+      --label "Starting Viewer Web" --show-final-status
     stage_step "Viewer service ready"
     bind_host="$("${PYTHON_BIN}" -c 'import json,sys;v=json.load(open(sys.argv[1]))["server"];print("127.0.0.1" if v["bind_host"] in {"0.0.0.0","::"} else v["bind_host"])' "${RUN_ROOT}/config.json")"
     web_port="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["server"]["web_port"])' "${RUN_ROOT}/config.json")"

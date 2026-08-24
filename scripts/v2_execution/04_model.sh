@@ -12,14 +12,17 @@ case "${action}" in
     if [[ -f "${RUN_ROOT}/runtime.pid" ]] && kill -0 "$(runtime_pid)" 2>/dev/null; then
       "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" wait \
         --field model.state --value ready --fail-value failed --timeout 900 --interval 0.2 \
-        --label "Loading and warming up model"
+        --label "Loading and warming up model" --show-final-status
       stage_step "Existing model process reused"
       stage_step "Model service ready"
       exit 0
     fi
     runtime_log="${RUN_ROOT}/logs/runtime.log"
-    printf '\n===== Runtime start %s · Stage 04 PID %s =====\n' \
-      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$$" >>"${runtime_log}"
+    if ! printf '\n===== Runtime start %s · Stage 04 PID %s =====\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$$" >>"${runtime_log}"; then
+      printf 'Warning: runtime log unavailable; continuing without archival.\n' >&2
+      runtime_log="/dev/null"
+    fi
     nohup "${PYTHON_BIN}" -m duet_edge_realtime.runtime \
       --config "${RUN_ROOT}/config.json" --run-dir "${RUN_ROOT}" \
       >>"${runtime_log}" 2>&1 &
@@ -27,7 +30,7 @@ case "${action}" in
     stage_step "Runtime process started"
     "${PYTHON_BIN}" scripts/v2_execution/lib/runtime_client.py --run "${RUN_ROOT}" wait \
       --field model.state --value ready --fail-value failed --timeout 900 --interval 0.2 \
-      --label "Loading and warming up model"
+      --label "Loading and warming up model" --show-final-status
     stage_step "Model service ready"
     ;;
   status)

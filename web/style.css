@@ -124,7 +124,7 @@ canvas.dragging { cursor: grabbing; }
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   border: 1px solid var(--line);
   border-top: 0;
   background: var(--panel);
