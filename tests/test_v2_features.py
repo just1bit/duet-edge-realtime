@@ -116,8 +116,8 @@ class V2FeatureTests(unittest.TestCase):
             })
             result = subprocess.run([
                 "bash",
-                str(Path(__file__).parents[1] / "scripts/v2_execution/04_model.sh"),
-                "start", "--run", str(run),
+                str(Path(__file__).parents[1] / "scripts/v2_execution/service.sh"),
+                "model", "start", "--run", str(run),
             ], text=True, capture_output=True, check=False, env=environment)
             self.assertEqual(result.returncode, 0)
             self.assertTrue((run / "runtime.pid").is_file())
@@ -130,6 +130,30 @@ class V2FeatureTests(unittest.TestCase):
         self.assertIsNone(client["session_ratio"]({
             "session": {"progress": None},
         }))
+
+    def test_runtime_client_rejects_a_different_run_before_mutation(self):
+        client = runpy.run_path(str(
+            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+        ))
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp) / "run-current"
+            run.mkdir()
+            (run / "config.json").write_text(json.dumps({
+                "server": {
+                    "bind_host": "127.0.0.1",
+                    "control_port": 8766,
+                },
+            }), encoding="utf-8")
+            calls = []
+
+            def raw_request(_run, method, path):
+                calls.append((method, path))
+                return {"run_id": "run-old"}
+
+            client["request"].__globals__["raw_request"] = raw_request
+            with self.assertRaises(RuntimeError):
+                client["request"](run, "POST", "/viewer/start")
+            self.assertEqual(calls, [("GET", "/status")])
 
     def test_runtime_client_flushes_waits_and_falls_back_to_model_progress(self):
         client = runpy.run_path(str(

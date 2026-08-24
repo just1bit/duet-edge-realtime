@@ -26,17 +26,19 @@ def available_port() -> int:
 
 
 class RuntimeReadyTests(unittest.TestCase):
-    def test_manual_stage_order_matches_script_order(self):
+    def test_manual_stage_order_matches_service_layout(self):
         repo = Path(__file__).resolve().parents[1]
         manual = (repo / "docs" / "V2_EXECUTION_MANUAL.md").read_text()
         self.assertEqual(
             re.findall(r"^### Stage (\d{2})", manual, flags=re.MULTILINE),
-            [f"{value:02d}" for value in range(1, 11)],
+            ["01", "02", "03", "04", "05", "06", "07", "09", "10"],
         )
+        self.assertIn("### Stage 07&08", manual)
         scripts = sorted(
             path.name for path in (repo / "scripts" / "v2_execution").glob("[0-9][0-9]_*.sh")
         )
-        self.assertEqual([name[:2] for name in scripts], [f"{value:02d}" for value in range(1, 11)])
+        self.assertEqual([name[:2] for name in scripts], ["01", "02", "03", "09", "10"])
+        self.assertTrue((repo / "scripts/v2_execution/service.sh").is_file())
 
     def test_components_wait_until_locked_input_is_started(self):
         async def scenario(root: Path):

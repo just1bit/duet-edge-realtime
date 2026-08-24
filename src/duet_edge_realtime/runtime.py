@@ -320,7 +320,7 @@ class RuntimeDaemon:
         )
 
     async def start_session(self) -> None:
-        if self.session_state in {"preparing", "starting", "running", "finished"}:
+        if self.session_state in {"preparing", "starting", "running"}:
             return
         if not (
             self.model_state == self.stream_state == self.viewer_state == "ready"
@@ -330,6 +330,7 @@ class RuntimeDaemon:
             raise RuntimeError("formal run artifacts already exist")
         self.session_id = f"{self.run_id}:formal"
         self.session_state = "preparing"
+        self.error = None
         self.persist_status()
         self.session_task = asyncio.create_task(self._prepare_and_run_session())
 

@@ -42,11 +42,10 @@ issue, return to this section and repeat the corresponding installation command.
 | 01 | Init / Resume | `bash scripts/v2_execution/01_run.sh` | 创建或恢复独立 `RUN_ROOT`。 |
 | 02 | Runtime Check & Smoke | `bash scripts/v2_execution/02_runtime_smoke.sh` | 运行时、测试、输入和资产通过检查。 |
 | 03 | Baseline & Auto-config | `bash scripts/v2_execution/03_baseline.sh` | 用固定采样步数完成真实时钟基线并自动定稿配置。 |
-| 04 | Model Service | `bash scripts/v2_execution/04_model.sh start` | 模型加载、预热并进入 Ready。 |
-| 05 | Realtime Stream | `bash scripts/v2_execution/05_stream.sh start` | 流处理组件进入 Ready，等待输入。 |
-| 06 | Viewer Web | `bash scripts/v2_execution/06_viewer.sh start` | Viewer 与 WebSocket 进入 Ready，页面显示等待输入。 |
-| 07 | Prepare & Check Input | `bash scripts/v2_execution/07_input.sh` | 正式输入完成校验和锁定。 |
-| 08 | Input & Run | `bash scripts/v2_execution/08_run_test.sh` | 注入锁定输入并完成正式实时运行。 |
+| 04 | Model Service | `bash scripts/v2_execution/service.sh model start` | 模型加载、预热并进入 Ready。 |
+| 05 | Realtime Stream | `bash scripts/v2_execution/service.sh stream start` | 流处理组件进入 Ready，等待输入。 |
+| 06 | Viewer Web | `bash scripts/v2_execution/service.sh viewer start` | Viewer 与 WebSocket 进入 Ready，页面显示等待输入。 |
+| 07&08 | Input & Run | `bash scripts/v2_execution/service.sh test <path>` | 校验和锁定输入，注入并运行。 |
 | 09 | Verify & Report | `bash scripts/v2_execution/09_verify_report.sh` | 生成验收结果和报告。 |
 | 10 | Export Fixture（可选） | `bash scripts/v2_execution/10_export_fixture.sh` | 导出回归和 Recorded 回放数据。 |
 
@@ -128,7 +127,7 @@ evidence/baseline-runs/timing-baseline/summary.json
 ### Stage 04 — Model Service
 
 ```bash
-bash scripts/v2_execution/04_model.sh start
+bash scripts/v2_execution/service.sh model start
 ```
 
 该命令启动一个常驻 Runtime 进程。CUDA 后端在此阶段创建 EDGE 模型、加载 checkpoint、执行
@@ -140,12 +139,12 @@ Runtime PID 写入 `runtime.pid`，日志写入 `logs/runtime.log`，模型证�
 继续条件：warmup 的窗口与 sampling-step 两层真实进度完成并显示 `ready`，
 随后终端显示 `Model service ready` 和 `Stage 04 SUCCESS · Model Service · start`；
 `runtime.pid` 对应的进程存活，且运行时状态中 `model.state` 为 `ready`。如需复核，运行
-`bash scripts/v2_execution/04_model.sh status`，或检查 `evidence/model-service.json.status` 为 `ready`。
+`bash scripts/v2_execution/service.sh status`，或检查 `evidence/model-service.json.status` 为 `ready`。
 
 ### Stage 05 — Realtime Stream
 
 ```bash
-bash scripts/v2_execution/05_stream.sh start
+bash scripts/v2_execution/service.sh stream start
 ```
 
 该命令激活流处理组件，确认推理队列、播放队列和策略已经按定稿配置就绪。此时不会启动输入、
@@ -156,12 +155,12 @@ bash scripts/v2_execution/05_stream.sh start
 继续条件：`Preparing realtime stream service` 显示 `ready`，随后终端显示 `Realtime stream service ready` 和
 `Stage 05 SUCCESS · Realtime Stream Service · start`；运行时状态中 `stream.state` 为 `ready`，
 `session.state` 仍为 `idle`，且 `evidence/stream-service.json.status` 为 `ready`。可用
-`bash scripts/v2_execution/05_stream.sh status` 复核。
+`bash scripts/v2_execution/service.sh status` 复核。
 
 ### Stage 06 — Viewer Web
 
 ```bash
-bash scripts/v2_execution/06_viewer.sh start
+bash scripts/v2_execution/service.sh viewer start
 ```
 
 该命令启动 Viewer 静态页面和 WebSocket 服务。默认 Viewer 地址为
@@ -176,50 +175,29 @@ bash scripts/v2_execution/06_viewer.sh start
 Viewer、连接 WebSocket，并显示 `Waiting for input`；`evidence/viewer-service.json.status` 为
 `ready`，其 URL 与终端输出一致。
 
-### Stage 07 — Prepare & Check Input
+### Stage 07&08 — Input & Run
 
 ```bash
-bash scripts/v2_execution/07_input.sh
+bash scripts/v2_execution/service.sh test <path>
 ```
 
-该命令校验正式输入，计算 SHA-256、帧数、时长、格式和时间线身份，然后生成独立的
-`input-manifest.json`。Stage 03 已定稿的 `config.json` 保持不变。
-
-可选择其他输入；参考长输入：
+测试长输入：
 
 ```bash
-bash scripts/v2_execution/07_input.sh --input '../data+checkpoint/stitched_long_input/stitched_long_input.pkl'
+bash scripts/v2_execution/service.sh test '../data+checkpoint/stitched_long_input/stitched_long_input.pkl'
 ```
 
-脚本优先从输入目录中的 `timeline.json`、`conversion.json`、`manifest.json` 或
-`metadata.json` 读取 root scaling 身份；自定义输入也可明确添加
-`--root-scaled true|false`。
+首先确认 Model、Stream 和 Viewer 全部 Ready，并确认当前没有正在执行的测试；然后校验输入，计算 SHA-256、帧数、时长、格式和时间线身份，生成并锁定 `input-manifest.json`。省略 `path` 时使用 `config.json` 中 `paths.input_motion` 指定的默认输入。
 
-CUDA AIST 输入需要对齐的 `pos`/`q` 序列，至少包含 300 个 60 FPS 原始帧；Recorded/Fake
-输入需要带 `motion_151` 的 `.npz`。
+CUDA AIST 输入需要对齐的 `pos`/`q` 序列，至少包含 300 个 60 FPS 原始帧；Recorded/Fake 输入需要带 `motion_151` 的 `.npz`。
 
-输入清单记录 `run_id`、配置哈希、输入哈希和锁定时间。证据副本写入
-`evidence/input.json`。
+输入清单记录 `run_id`、配置哈希、输入哈希和锁定时间。证据副本写入 `evidence/input.json`。
 
-继续条件：输入结构、身份与哈希记录完成，最后显示
-`Formal input manifest locked` 和 `Stage 07 SUCCESS`；`input-manifest.json.status` 为
-`locked`，`passed` 为 `true`，路径、时长和哈希与计划输入一致。
+锁定input后，向 Runtime 提交正式session。Runtime 在此时才创建输入适配器，并依次进入`buffering → playing → draining → finished`。
 
-### Stage 08 — Input & Run
+脚本持续等待正式输入处理完毕。同 `RUN_ROOT` 可以串行执行多次 `test`。新输入校验并锁定成功后，脚本会覆盖上次结果，每次只保留最新结果；如果新输入校验失败，则保留上次结果。
 
-```bash
-bash scripts/v2_execution/08_run_test.sh
-```
-
-该命令确认 Model、Stream 和 Viewer 全部 Ready，重新核对配置及输入哈希，然后向 Runtime
-提交一次正式 session。Runtime 在此时才创建输入适配器，并依次进入
-`buffering → playing → draining → finished`。
-
-脚本持续等待正式输入处理完毕。重复提交同一运行只返回已有 session 状态，不会重复启动输入。
-
-继续条件：窗口与 sampling-step 两层真实进度完成后，playout 按已输出帧数到达 100% 并显示
-`ready`；终端打印 `Formal run completed: ...`、`Run evidence written` 和 `Stage 08 SUCCESS`；运行时 `session.state` 为 `finished`，且
-`summary.json` 和 `stream.ndjson` 均存在。
+继续条件：窗口与 sampling-step 两层真实进度完成后，playout 按已输出帧数到达 100% 并显示 `ready`；终端打印 `Formal run completed: ...`、`Run evidence written` 和 `Stage 08 SUCCESS`；运行时 `session.state` 为 `finished`，且 `summary.json` 和 `stream.ndjson` 均存在。
 
 ### Stage 09 — Verify & Report
 
@@ -272,13 +250,13 @@ fixtures/recorded_fixture.npz
 查看整个 Runtime 状态：
 
 ```bash
-bash scripts/v2_execution/04_model.sh status
+bash scripts/v2_execution/service.sh status
 ```
 
 状态包含 Model、Stream、Viewer 和正式 session 四部分。停止 Runtime：
 
 ```bash
-bash scripts/v2_execution/04_model.sh stop
+bash scripts/v2_execution/service.sh stop
 ```
 
 一次完成的运行包含：

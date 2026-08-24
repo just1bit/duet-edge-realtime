@@ -89,7 +89,16 @@ def base_url(run: Path) -> str:
     return f"http://{host}:{server.get('control_port', 8766)}"
 
 
-def request(run: Path, method: str, path: str) -> dict:
+def validate_identity(run: Path, payload: dict) -> None:
+    actual_run_id = payload.get("run_id")
+    if actual_run_id != run.name:
+        raise RuntimeError(
+            "Control port belongs to a different runtime: "
+            f"expected run_id={run.name}, got run_id={actual_run_id!r}. "
+            "Stop the owning runtime before starting this run."
+        )
+
+def raw_request(run: Path, method: str, path: str) -> dict:
     value = urllib.request.Request(
         base_url(run) + path,
         method=method,
@@ -101,6 +110,14 @@ def request(run: Path, method: str, path: str) -> dict:
     except urllib.error.HTTPError as exc:
         payload = json.loads(exc.read())
         raise RuntimeError(payload.get("error", str(exc))) from exc
+
+
+def request(run: Path, method: str, path: str) -> dict:
+    if method != "GET":
+        validate_identity(run, raw_request(run, "GET", "/status"))
+    payload = raw_request(run, method, path)
+    validate_identity(run, payload)
+    return payload
 
 
 def nested(value: dict, field: str):
@@ -137,7 +154,10 @@ def main() -> None:
     }
     if args.command != "wait":
         method, path = endpoints[args.command]
-        result = request(run, method, path)
+        try:
+            result = request(run, method, path)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
         if args.command == "status":
             print(json.dumps(result, indent=2))
         else:
@@ -201,6 +221,8 @@ def main() -> None:
                     + (f" · {detail}" if detail else "")
                 )
             last_poll_error = None
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
         except (OSError, RuntimeError, KeyError) as exc:
             last_poll_error = str(exc)
             pid_path = run / "runtime.pid"
