@@ -3,47 +3,47 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Duet-EDGE Realtime V2</title>
-  <link rel="stylesheet" href="style.css">
+  <title>Duet Realtime Motion Viewer</title>
+  <link rel="stylesheet" href="style.css?v=monitor-minimal-13">
 </head>
 <body>
   <main>
-    <header>
-      <div><p class="eyebrow">DUET-EDGE / REALTIME V2</p><h1>Lead &amp; Companion Motion</h1></div>
-      <div class="badges"><span id="backend" class="badge mode">WAITING</span><span id="connection" class="badge offline">Disconnected</span></div>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Duet Realtime Motion Viewer</h1>
+      </div>
+      <section class="toolbar" aria-label="Viewer controls">
+        <input id="ws-url" aria-label="WebSocket" value="ws://127.0.0.1:8765" spellcheck="false">
+        <button id="connect" class="primary">Connect Live</button>
+        <label class="file-button">Open NDJSON<input id="file" type="file" accept=".ndjson,application/x-ndjson"></label>
+        <button id="play" class="secondary" disabled>Pause</button>
+      </section>
+      <div class="status-group" aria-live="polite">
+        <span id="mode" class="mode-pill">LIVE</span>
+        <span id="connection" class="status-pill waiting"><i></i>Waiting for stream</span>
+      </div>
     </header>
-    <section class="controls primary">
-      <label>WebSocket <input id="ws-url" value="ws://127.0.0.1:8765"></label>
-      <button id="connect">Connect</button>
-      <label class="file">Open NDJSON<input id="file" type="file" accept=".ndjson,application/x-ndjson"></label>
-      <button id="pause" class="ghost">Pause</button>
-      <button id="restart" class="ghost">Restart</button>
+
+    <section class="viewer" aria-label="Lead and companion skeleton viewer">
+      <div class="dancer-label lead"><i></i><span>LEAD</span><small>Source motion</small></div>
+      <div class="dancer-label companion"><i></i><span>COMPANION</span><small>Generated motion</small></div>
+      <div class="center-line" aria-hidden="true"></div>
+      <canvas id="canvas" width="1200" height="600"></canvas>
+      <div id="empty-state" class="empty-state">
+        <strong>Waiting for motion</strong>
+        <span>Connects automatically, or open an NDJSON recording.</span>
+      </div>
+      <div class="drag-hint">Drag canvas to rotate view</div>
     </section>
-    <section class="controls transport">
-      <label class="seek">Timeline <input id="seek" type="range" min="0" max="0" value="0"></label>
-      <label>Speed <select id="speed"><option>.5</option><option selected>1</option><option>1.5</option><option>2</option></select></label>
-      <button id="world" class="ghost active">Shared World</button>
-      <button id="diagnostic" class="ghost">Side-by-Side</button>
-      <button id="camera-left" class="icon ghost" aria-label="Rotate camera left">↶</button>
-      <button id="camera-right" class="icon ghost" aria-label="Rotate camera right">↷</button>
-      <button id="zoom" class="icon ghost" aria-label="Change zoom">＋</button>
-    </section>
-    <section class="stage">
-      <canvas id="canvas" width="1180" height="680"></canvas>
-      <div class="latency"><span>Declared Fixed Latency</span><strong id="latency">—</strong></div>
-      <div id="guidance" class="guidance">Connecting automatically…</div>
-    </section>
-    <section class="metrics">
-      <article><span>State</span><strong id="status">Disconnected</strong></article>
-      <article><span>Frame / Clip</span><strong id="frame">—</strong></article>
-      <article><span>Frame Age</span><strong id="age">—</strong></article>
-      <article><span>Inference P95</span><strong id="p95">—</strong></article>
-      <article><span>Jitter / Drops</span><strong id="delivery">—</strong></article>
-      <article><span>Render FPS</span><strong id="render-fps">—</strong></article>
-      <article><span>Checkpoint / Steps</span><strong id="model">—</strong></article>
-      <article><span>Reconnects</span><strong id="reconnects">0</strong></article>
+
+    <section class="metrics" aria-label="Realtime metrics">
+      <article><span>Frame · Clip</span><strong id="frame">—</strong></article>
+      <article><span>Viewer Delay</span><strong id="age">—</strong></article>
+      <article><span>Pipeline Latency</span><strong id="e2e">—</strong></article>
+      <article><span>Model Inference P95</span><strong id="p95">—</strong></article>
+      <article><span>Jitter · Drops</span><strong id="delivery">—</strong></article>
     </section>
   </main>
-  <script src="viewer.js?v=v3-final"></script>
+  <script src="viewer.js?v=monitor-minimal-12"></script>
 </body>
 </html>
