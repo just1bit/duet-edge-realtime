@@ -52,7 +52,7 @@ At a clip transition:
 
 - `baseline_input/` for the baseline and default formal test;
 - `smoke_input/` for runtime and CUDA smoke checks;
-- `stitched_long_input/` for endurance, continuity, and release-acceptance runs.
+- `stitched_long_input/` for endurance, continuity, and long-input acceptance runs.
 
 ### 2.2 Authoritative lead path
 

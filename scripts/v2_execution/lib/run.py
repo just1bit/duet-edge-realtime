@@ -18,7 +18,7 @@ from pathlib import Path
 
 REALTIME_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_ROOT = REALTIME_ROOT.parent
-STATE_FILE = REALTIME_ROOT / "outputs" / ".v2-current"
+STATE_FILE = REALTIME_ROOT / "outputs" / ".run-current"
 
 
 def sha256(path: Path) -> str:
@@ -419,10 +419,10 @@ def command_report(args) -> None:
             if value is not None and threshold is not None:
                 checks[check_name] = compare(value, threshold)
     duration_s = len(frames) / summary["config"]["stream"]["fps"] if frames else 0
-    if args.require_ten_minutes or args.release:
+    if args.require_ten_minutes or args.long_input:
         checks["ten_minute_duration"] = len(frames) >= 18000 and duration_s >= 600
-    if args.release:
-        checks["release_backend_cuda"] = backend == "cuda"
+    if args.long_input:
+        checks["long_input_backend_cuda"] = backend == "cuda"
         checks["viewer_connected"] = summary.get("clients", {}).get("peak_connected", 0) >= 1
         checks["viewer_zero_drops"] = summary.get("output", {}).get("dropped_view_frames") == 0
         checks["browser_zero_stalls"] = summary.get("clients", {}).get("visible_stalls") == 0
@@ -450,7 +450,7 @@ def main() -> None:
     init.add_argument("--template", default="configs/example.json")
     init.add_argument("--resume")
     init.add_argument("--output-root", default="outputs")
-    init.add_argument("--state-file", default="outputs/.v2-current")
+    init.add_argument("--state-file", default="outputs/.run-current")
     init.set_defaults(func=command_init)
     input_parser = sub.add_parser("input")
     input_parser.add_argument("--run")
@@ -466,7 +466,7 @@ def main() -> None:
     report = sub.add_parser("report")
     report.add_argument("--run")
     report.add_argument("--require-ten-minutes", action="store_true")
-    report.add_argument("--release", action="store_true")
+    report.add_argument("--long-input", action="store_true")
     report.set_defaults(func=command_report)
     args = parser.parse_args()
     args.func(args)

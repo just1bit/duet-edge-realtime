@@ -5,7 +5,7 @@ V2_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REALTIME_ROOT="$(CDPATH= cd -- "${V2_SCRIPT_DIR}/../.." && pwd -P)"
 PROJECT_ROOT="$(dirname -- "${REALTIME_ROOT}")"
 PYTHON_BIN="${PYTHON_BIN:-${REALTIME_ROOT}/.venv/bin/python3}"
-STATE_FILE="${REALTIME_ROOT}/outputs/.v2-current"
+STATE_FILE="${REALTIME_ROOT}/outputs/.run-current"
 
 STAGE_NUMBER=""
 STAGE_TITLE=""
