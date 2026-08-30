@@ -35,3 +35,6 @@ acceptance procedure.
 The wire contract is documented in [PROTOCOL.md](PROTOCOL.md). The architecture,
 quality gates, and definition of done are recorded in
 [V2_REALTIME_PLAN.md](V2_REALTIME_PLAN.md).
+
+The optional camera-to-model path is documented in
+[MEDIAPIPE_INPUT.md](MEDIAPIPE_INPUT.md).

@@ -139,6 +139,7 @@ def main() -> None:
     sub.add_parser("start-stream")
     sub.add_parser("start-viewer")
     sub.add_parser("start-run")
+    sub.add_parser("stop-run")
     sub.add_parser("shutdown")
     wait = sub.add_parser("wait")
     wait.add_argument("--field", required=True)
@@ -155,6 +156,7 @@ def main() -> None:
         "start-stream": ("POST", "/stream/start"),
         "start-viewer": ("POST", "/viewer/start"),
         "start-run": ("POST", "/run/start"),
+        "stop-run": ("POST", "/run/stop"),
         "shutdown": ("POST", "/shutdown"),
     }
     if args.command != "wait":

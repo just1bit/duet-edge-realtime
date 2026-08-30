@@ -22,6 +22,7 @@ from .continuity import OnlineContinuityProcessor, direct_fk
 from .input_adapters import AISTFileReplayAdapter, NormalizedFixtureAdapter
 from .lifecycle import Lifecycle, ServiceState
 from .metrics import RunMetrics
+from .mediapipe_input import MediaPipeCameraAdapter
 from .motion_quality import OnlineMotionQuality
 from .playout import RealtimeClock, VirtualClock
 from .progress import TerminalProgress
@@ -295,18 +296,7 @@ class StreamingService:
 
     async def _produce_input(self) -> None:
         buffer = SlidingWindowBuffer(seed=self.config.model.seed)
-        source_start = self.clock.now()
-        for frame in self.source.frames():
-            source_deadline = source_start + frame.seq / self.config.fps
-            if isinstance(self.clock, VirtualClock):
-                # Input event time and playout time are separate logical lanes.
-                # Advancing their shared virtual clock here lets playout move
-                # future input windows and corrupts observed source timing.
-                await asyncio.sleep(0)
-                ingest_time = source_deadline
-            else:
-                await self.clock.sleep_until(source_deadline)
-                ingest_time = self.clock.now()
+        async for frame, ingest_time in self._source_frames():
             frame = replace(frame, ingest_monotonic_s=ingest_time)
             if self.metrics.input_first_clock_s is None:
                 self.metrics.input_first_clock_s = ingest_time
@@ -340,6 +330,26 @@ class StreamingService:
         if self.lifecycle.state == ServiceState.PLAYING:
             await self._transition(ServiceState.DRAINING)
         await self._inference_queue.put(STOP)
+
+    async def _source_frames(self):
+        """Yield offline paced frames or already-paced live camera frames."""
+        if hasattr(self.source, "frames_async"):
+            async for frame in self.source.frames_async():
+                yield frame, self.clock.now()
+            return
+        source_start = self.clock.now()
+        for frame in self.source.frames():
+            source_deadline = source_start + frame.seq / self.config.fps
+            if isinstance(self.clock, VirtualClock):
+                # Input event time and playout time are separate logical lanes.
+                # Advancing their shared virtual clock here lets playout move
+                # future input windows and corrupts observed source timing.
+                await asyncio.sleep(0)
+                ingest_time = source_deadline
+            else:
+                await self.clock.sleep_until(source_deadline)
+                ingest_time = self.clock.now()
+            yield frame, ingest_time
 
     async def _enqueue_inference(self, window) -> None:
         if not self._inference_queue.full():
@@ -637,7 +647,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="configs/example.json")
     parser.add_argument("--backend", choices=("fake", "recorded", "cuda"))
     parser.add_argument("--input")
-    parser.add_argument("--input-format", choices=("fixture", "aist"))
+    parser.add_argument("--input-format", choices=("fixture", "aist", "mediapipe"))
+    parser.add_argument("--mediapipe-model", help="MediaPipe Pose Landmarker .task model")
+    parser.add_argument("--camera-index", type=int)
+    parser.add_argument("--camera-width", type=int)
+    parser.add_argument("--camera-height", type=int)
     parser.add_argument("--root-scaled", choices=("true", "false"))
     parser.add_argument("--checkpoint")
     parser.add_argument("--duet-edge-root")
@@ -664,6 +678,15 @@ async def _async_main(args: argparse.Namespace) -> None:
     progress = TerminalProgress(args.progress)
     config = RealtimeConfig.load(args.config)
     backend_name = args.backend or config.backend
+    input_format = args.input_format or (
+        "mediapipe"
+        if config.input.mode == "mediapipe"
+        else ("fixture" if backend_name in {"fake", "recorded"} else "aist")
+    )
+    if input_format == "mediapipe" and backend_name != "cuda":
+        raise SystemExit("MediaPipe input requires --backend cuda")
+    if input_format == "mediapipe" and args.clock != "realtime":
+        raise SystemExit("MediaPipe input requires --clock realtime")
     model = config.model
     stream = config.stream
     if args.sampling_steps is not None:
@@ -688,7 +711,14 @@ async def _async_main(args: argparse.Namespace) -> None:
         required=backend_name == "cuda",
     )
     input_path = resolved_path(
-        args.input, "EDGE_INPUT_MOTION", config.paths.input_motion, required=True
+        args.input, "EDGE_INPUT_MOTION", config.paths.input_motion,
+        required=input_format != "mediapipe",
+    )
+    mediapipe_model = resolved_path(
+        args.mediapipe_model,
+        "MEDIAPIPE_POSE_MODEL",
+        config.paths.mediapipe_model,
+        required=input_format == "mediapipe",
     )
     output_base = resolved_path(
         args.output_dir,
@@ -716,6 +746,21 @@ async def _async_main(args: argparse.Namespace) -> None:
         if args.root_scaled is not None
         else config.paths.root_scaled
     )
+    camera_index = (
+        config.input.camera_index
+        if args.camera_index is None
+        else args.camera_index
+    )
+    camera_width = (
+        config.input.camera_width
+        if args.camera_width is None
+        else args.camera_width
+    )
+    camera_height = (
+        config.input.camera_height
+        if args.camera_height is None
+        else args.camera_height
+    )
     config = replace(
         config,
         backend=backend_name,
@@ -724,8 +769,16 @@ async def _async_main(args: argparse.Namespace) -> None:
             duet_edge_root=engine_root,
             checkpoint=checkpoint,
             input_motion=input_path,
+            mediapipe_model=mediapipe_model,
             output_dir=str(output_dir),
             root_scaled=root_scaled,
+        ),
+        input=replace(
+            config.input,
+            mode="mediapipe" if input_format == "mediapipe" else "file",
+            camera_index=camera_index,
+            camera_width=camera_width,
+            camera_height=camera_height,
         ),
         model=model,
         stream=stream,
@@ -809,12 +862,9 @@ async def _async_main(args: argparse.Namespace) -> None:
     warmup_ms = (time.perf_counter() - warmup_started) * 1000.0
 
     try:
-        input_format = args.input_format or (
-            "fixture" if backend_name in {"fake", "recorded"} else "aist"
-        )
         if input_format == "fixture":
             source = NormalizedFixtureAdapter(input_path, config.fps, loop=args.loop)
-        else:
+        elif input_format == "aist":
             if backend_name != "cuda":
                 raise ValueError("AIST preprocessing requires the CUDA Duet-EDGE backend")
             if root_scaled is None:
@@ -829,6 +879,20 @@ async def _async_main(args: argparse.Namespace) -> None:
                 end_frame=config.input.end_frame,
                 loop=args.loop,
             )
+        else:
+            if backend_name != "cuda":
+                raise ValueError("MediaPipe input requires the CUDA Duet-EDGE backend")
+            if not isinstance(clock, RealtimeClock):
+                raise ValueError("MediaPipe input requires --clock realtime")
+            source = MediaPipeCameraAdapter(
+                mediapipe_model,
+                backend.edge.normalizer,
+                camera_index=config.input.camera_index,
+                fps=config.fps,
+                width=config.input.camera_width,
+                height=config.input.camera_height,
+                maximum_missing_s=config.input.maximum_missing_s,
+            )
     except Exception as exc:
         await _record_startup_failure(
             service, backend, config, output_dir, backend_name, exc,
@@ -836,14 +900,17 @@ async def _async_main(args: argparse.Namespace) -> None:
         )
         raise
     service.source = source
-    source_frames = len(source.motion) * source.loop
-    total_windows = 1 + max(
-        0,
-        (source_frames - config.window_frames + config.hop_frames - 1)
-        // config.hop_frames,
-    )
-    if hasattr(backend, "set_inference_total_windows"):
-        backend.set_inference_total_windows(total_windows)
+    if not getattr(source, "is_live", False):
+        source_frames = len(source.motion) * source.loop
+        total_windows = 1 + max(
+            0,
+            (source_frames - config.window_frames + config.hop_frames - 1)
+            // config.hop_frames,
+        )
+        if hasattr(backend, "set_inference_total_windows"):
+            backend.set_inference_total_windows(total_windows)
+    elif hasattr(backend, "set_inference_total_windows"):
+        backend.set_inference_total_windows(0)
     service.metrics.model_load_warmup_ms = warmup_ms
     LOG.info(
         "run_id=%s backend=%s input=%s output=%s",

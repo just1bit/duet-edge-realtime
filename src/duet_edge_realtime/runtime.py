@@ -15,6 +15,7 @@ from .backends.fake import FakeInferenceBackend
 from .backends.recorded import RecordedInferenceBackend
 from .config import RealtimeConfig
 from .input_adapters import AISTFileReplayAdapter, NormalizedFixtureAdapter
+from .mediapipe_input import MediaPipeCameraAdapter
 from .playout import RealtimeClock
 from .schemas import PROTOCOL_NAME, SCHEMA_VERSION
 from .service import StreamingService
@@ -92,7 +93,7 @@ class RuntimeDaemon:
         if self.active_service is not None:
             total_frames = None
             manifest_path = self.run_dir / "input-manifest.json"
-            if manifest_path.is_file():
+            if self.config.input.mode != "mediapipe" and manifest_path.is_file():
                 try:
                     total_frames = json.loads(
                         manifest_path.read_text(encoding="utf-8")
@@ -336,41 +337,58 @@ class RuntimeDaemon:
 
     async def _prepare_and_run_session(self) -> None:
         try:
-            manifest = await asyncio.to_thread(self._load_input_manifest)
-            config = self._session_config(manifest)
-            input_path = Path(manifest["path"])
-            if self.config.backend == "recorded":
-                self.backend = RecordedInferenceBackend(input_path)
-                await asyncio.to_thread(self.backend.warmup)
-            if self.backend is None:
-                raise RuntimeError("model backend is unavailable")
-            if manifest["input_format"] == "fixture":
-                source = await asyncio.to_thread(
-                    NormalizedFixtureAdapter, input_path, config.fps
-                )
-            elif manifest["input_format"] == "aist":
-                if self.config.backend != "cuda":
-                    raise RuntimeError("AIST input requires the CUDA backend")
-                source = await asyncio.to_thread(
-                    AISTFileReplayAdapter,
-                    input_path,
+            if self.config.input.mode == "mediapipe":
+                if self.config.backend != "cuda" or self.backend is None:
+                    raise RuntimeError("MediaPipe input requires the CUDA backend")
+                config = self.config
+                source = MediaPipeCameraAdapter(
+                    config.paths.mediapipe_model,
                     self.backend.edge.normalizer,
-                    config.paths.duet_edge_root,
-                    root_scaled=bool(manifest["root_scaled"]),
+                    camera_index=config.input.camera_index,
                     fps=config.fps,
-                    start_frame=config.input.start_frame,
-                    end_frame=config.input.end_frame,
+                    width=config.input.camera_width,
+                    height=config.input.camera_height,
+                    maximum_missing_s=config.input.maximum_missing_s,
                 )
             else:
-                raise RuntimeError(f"unknown input format {manifest['input_format']!r}")
-            source_frames = len(source.motion) * source.loop
-            total_windows = 1 + max(
-                0,
-                (source_frames - config.window_frames + config.hop_frames - 1)
-                // config.hop_frames,
-            )
-            if hasattr(self.backend, "set_inference_total_windows"):
-                self.backend.set_inference_total_windows(total_windows)
+                manifest = await asyncio.to_thread(self._load_input_manifest)
+                config = self._session_config(manifest)
+                input_path = Path(manifest["path"])
+                if self.config.backend == "recorded":
+                    self.backend = RecordedInferenceBackend(input_path)
+                    await asyncio.to_thread(self.backend.warmup)
+                if self.backend is None:
+                    raise RuntimeError("model backend is unavailable")
+                if manifest["input_format"] == "fixture":
+                    source = await asyncio.to_thread(
+                        NormalizedFixtureAdapter, input_path, config.fps
+                    )
+                elif manifest["input_format"] == "aist":
+                    if self.config.backend != "cuda":
+                        raise RuntimeError("AIST input requires the CUDA backend")
+                    source = await asyncio.to_thread(
+                        AISTFileReplayAdapter,
+                        input_path,
+                        self.backend.edge.normalizer,
+                        config.paths.duet_edge_root,
+                        root_scaled=bool(manifest["root_scaled"]),
+                        fps=config.fps,
+                        start_frame=config.input.start_frame,
+                        end_frame=config.input.end_frame,
+                    )
+                else:
+                    raise RuntimeError(f"unknown input format {manifest['input_format']!r}")
+            if not getattr(source, "is_live", False):
+                source_frames = len(source.motion) * source.loop
+                total_windows = 1 + max(
+                    0,
+                    (source_frames - config.window_frames + config.hop_frames - 1)
+                    // config.hop_frames,
+                )
+                if hasattr(self.backend, "set_inference_total_windows"):
+                    self.backend.set_inference_total_windows(total_windows)
+            elif hasattr(self.backend, "set_inference_total_windows"):
+                self.backend.set_inference_total_windows(0)
             session_sink = CompositeSink([
                 NDJSONSink(self.run_dir / "stream.ndjson"),
                 SessionViewerSink(self.websocket_sink),
@@ -407,6 +425,13 @@ class RuntimeDaemon:
             self.active_service = None
             self.persist_status()
 
+    async def stop_session(self) -> None:
+        if self.active_service is None or not getattr(
+            self.active_service.source, "is_live", False
+        ):
+            raise RuntimeError("no live MediaPipe session is running")
+        self.active_service.source.stop()
+
     async def _handle_control(self, reader, writer) -> None:
         status_code = 200
         try:
@@ -424,6 +449,10 @@ class RuntimeDaemon:
                 payload = self.status()
             elif method == "POST" and path == "/run/start":
                 await self.start_session()
+                status_code = 202
+                payload = self.status()
+            elif method == "POST" and path == "/run/stop":
+                await self.stop_session()
                 status_code = 202
                 payload = self.status()
             elif method == "POST" and path == "/shutdown":

@@ -10,6 +10,7 @@ class PathsConfig:
     duet_edge_root: str = ""
     checkpoint: str = ""
     input_motion: str = ""
+    mediapipe_model: str = ""
     output_dir: str = ""
     root_scaled: bool | None = None
     checkpoint_sha256: str = ""
@@ -18,18 +19,33 @@ class PathsConfig:
 
 @dataclass(frozen=True)
 class InputConfig:
+    mode: str = "file"
     timeline_id: str = ""
     start_frame: int = 0
     end_frame: int | None = None
     transition_frames: int = 30
+    camera_index: int = 0
+    camera_width: int | None = None
+    camera_height: int | None = None
+    maximum_missing_s: float = 0.5
 
     def __post_init__(self) -> None:
+        if self.mode not in {"file", "mediapipe"}:
+            raise ValueError("input.mode must be file or mediapipe")
         if self.start_frame < 0:
             raise ValueError("input.start_frame must be non-negative")
         if self.end_frame is not None and self.end_frame <= self.start_frame:
             raise ValueError("input.end_frame must be greater than start_frame")
         if self.transition_frames < 0:
             raise ValueError("input.transition_frames must be non-negative")
+        if self.camera_index < 0:
+            raise ValueError("input.camera_index must be non-negative")
+        if self.camera_width is not None and self.camera_width <= 0:
+            raise ValueError("input.camera_width must be positive")
+        if self.camera_height is not None and self.camera_height <= 0:
+            raise ValueError("input.camera_height must be positive")
+        if self.maximum_missing_s <= 0:
+            raise ValueError("input.maximum_missing_s must be positive")
 
 
 @dataclass(frozen=True)

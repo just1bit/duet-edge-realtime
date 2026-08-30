@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from duet_edge_realtime.config import ModelConfig, RealtimeConfig, StreamConfig
+from duet_edge_realtime.config import InputConfig, ModelConfig, RealtimeConfig, StreamConfig
 
 
 class ConfigTests(unittest.TestCase):
@@ -25,6 +25,11 @@ class ConfigTests(unittest.TestCase):
             ModelConfig(sampling_steps=0)
         with self.assertRaises(ValueError):
             StreamConfig(playout_delay_s=0.5)
+        self.assertEqual(InputConfig(mode="mediapipe").camera_index, 0)
+        with self.assertRaises(ValueError):
+            InputConfig(mode="camera")
+        with self.assertRaises(ValueError):
+            InputConfig(camera_index=-1)
 
     def test_nested_json_round_trip(self):
         data = {

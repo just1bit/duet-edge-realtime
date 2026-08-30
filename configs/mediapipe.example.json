@@ -3,17 +3,21 @@
   "paths": {
     "duet_edge_root": "../duet-edge",
     "checkpoint": "../data+checkpoint/train-1800.pt",
-    "input_motion": "../data+checkpoint/baseline_input/baseline_input.pkl",
-    "mediapipe_model": "",
+    "input_motion": "",
+    "mediapipe_model": "../data+checkpoint/pose_landmarker_full.task",
     "output_dir": "outputs",
     "root_scaled": false
   },
   "input": {
-    "mode": "file",
-    "timeline_id": "v2-baseline-input",
+    "mode": "mediapipe",
+    "timeline_id": "mediapipe-camera-0",
     "start_frame": 0,
     "end_frame": null,
-    "transition_frames": 30
+    "transition_frames": 0,
+    "camera_index": 0,
+    "camera_width": 1280,
+    "camera_height": 720,
+    "maximum_missing_s": 0.5
   },
   "model": {
     "guidance_music": 0.0,
