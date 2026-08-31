@@ -37,12 +37,12 @@ capture_stage() {
   run="$(selected_run "$@")"
   load_run "${run}"
   if [[ "${STAGE_CAPTURE_ACTIVE:-0}" == "1" ]]; then
-    bash "${SCRIPT_DIR}/service.sh" __stage "${number}" "$@"
+    bash "${SCRIPT_DIR}/runtime_service.sh" __stage "${number}" "$@"
     return
   fi
   STAGE_CAPTURE_ACTIVE=1 "${PYTHON_BIN}" "${SCRIPT_DIR}/lib/capture_stage.py" \
     --stage "${number}" --state-file "${STATE_FILE}" --run-root "${RUN_ROOT}" -- \
-    bash "${SCRIPT_DIR}/service.sh" __stage "${number}" "$@"
+    bash "${SCRIPT_DIR}/runtime_service.sh" __stage "${number}" "$@"
 }
 
 runtime_client() {

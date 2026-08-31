@@ -3,9 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 REALTIME_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
-V2_DIR="${REALTIME_ROOT}/scripts/v2_execution"
-V2_SERVICE="${V2_DIR}/service.sh"
-STATE_FILE="${REALTIME_ROOT}/outputs/.run-current"
+RUNTIME_SERVICE="${SCRIPT_DIR}/runtime_service.sh"
+RUN_TOOL="${SCRIPT_DIR}/lib/run.py"
+CAPTURE_TOOL="${SCRIPT_DIR}/lib/capture_stage.py"
+STATE_FILE="${REALTIME_ROOT}/outputs/.final-run-current"
 PYTHON_BIN="${PYTHON_BIN:-${REALTIME_ROOT}/.venv/bin/python3}"
 
 usage() {
@@ -28,7 +29,7 @@ quick_check() {
   printf '\nFinal service quick check\n'
   "${PYTHON_BIN}" -c 'import duet_edge_realtime, numpy, websockets'
   printf '  - Runtime imports ready\n'
-  "${PYTHON_BIN}" "${V2_DIR}/lib/run.py" input --run "${run_root}"
+  "${PYTHON_BIN}" "${RUN_TOOL}" input --run "${run_root}"
   printf '  - Default input structure ready\n'
   "${PYTHON_BIN}" - "${run_root}/config.json" <<'PY'
 import hashlib, json, sys
@@ -46,12 +47,47 @@ print("  - Configured asset identities ready")
 PY
 }
 
+full_check_run() {
+  local run_root="$1" backend
+  printf '\nStage 02 · Runtime Check and Smoke Test\n'
+  "${PYTHON_BIN}" -m pytest -q
+  printf '  - Automated tests passed\n'
+  quick_check "${run_root}"
+  for asset_dir in baseline_input smoke_input stitched_long_input; do
+    (cd "${REALTIME_ROOT}/../data+checkpoint/${asset_dir}" && shasum -a 256 -c SHA256SUMS)
+  done
+  printf '  - Test asset hashes verified\n'
+  backend="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["backend"])' "${run_root}/config.json")"
+  if [[ "${backend}" == "cuda" && ! -f "${run_root}/evidence/smoke-runs/cuda-smoke/summary.json" ]]; then
+    "${PYTHON_BIN}" -m duet_edge_realtime.service \
+      --config "${run_root}/config.json" \
+      --input "${REALTIME_ROOT}/../data+checkpoint/smoke_input/smoke_input.pkl" \
+      --input-format aist --root-scaled false --sampling-steps 5 \
+      --output-dir "${run_root}/evidence/smoke-runs" --run-id cuda-smoke \
+      --clock virtual --sink ndjson --progress
+  fi
+  printf '  - Backend smoke run completed\n'
+  printf 'Stage 02 SUCCESS · Runtime Check and Smoke Test\n'
+}
+
+initialize_run() {
+  local template="${1:-}" init_command
+  init_command=(
+    "${PYTHON_BIN}" "${RUN_TOOL}" init
+    --state-file "${STATE_FILE}"
+  )
+  [[ -z "${template}" ]] || init_command+=(--template "${template}")
+  "${PYTHON_BIN}" "${CAPTURE_TOOL}" \
+    --stage "01" --state-file "${STATE_FILE}" -- \
+    "${init_command[@]}"
+}
+
 calibrate_run() {
   local run_root="$1" backend baseline_root timing_summary baseline_loops
   backend="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["backend"])' "${run_root}/config.json")"
   baseline_root="${run_root}/evidence/baseline-runs"
   baseline_loops=1
-  [[ "${backend}" != "cuda" ]] || baseline_loops="${V2_BASELINE_LOOPS:-5}"
+  [[ "${backend}" != "cuda" ]] || baseline_loops="${FINAL_BASELINE_LOOPS:-5}"
 
   printf '\nFinal baseline and automatic configuration\n'
   if [[ ! -f "${baseline_root}/baseline/summary.json" ]]; then
@@ -83,7 +119,7 @@ calibrate_run() {
   fi
   printf '  - Timing baseline completed\n'
 
-  "${PYTHON_BIN}" "${V2_DIR}/lib/run.py" calibrate --run "${run_root}" \
+  "${PYTHON_BIN}" "${RUN_TOOL}" calibrate --run "${run_root}" \
     --summary "${timing_summary}" \
     --quality-summary "${baseline_root}/baseline/summary.json"
   printf '  - Configuration calibrated and locked\n'
@@ -121,14 +157,14 @@ start_service() {
 
   cd "${REALTIME_ROOT}"
   if [[ -n "${template}" ]]; then
-    bash "${V2_DIR}/01_run.sh" --template "${template}"
+    initialize_run "${template}"
     run_root="$(active_run)"
   elif [[ -z "${run_root}" ]]; then
     candidate="$(active_run 2>/dev/null || true)"
     if [[ -n "${candidate}" && -f "${candidate}/config.json" ]]; then
       run_root="${candidate}"
     else
-      bash "${V2_DIR}/01_run.sh"
+      initialize_run
       run_root="$(active_run)"
     fi
   fi
@@ -139,7 +175,9 @@ start_service() {
   fi
 
   if (( full_check == 1 )); then
-    bash "${V2_DIR}/02_runtime_smoke.sh" --run "${run_root}"
+    "${PYTHON_BIN}" "${CAPTURE_TOOL}" \
+      --stage "02" --state-file "${STATE_FILE}" --run-root "${run_root}" -- \
+      bash "$0" __full_check --run "${run_root}"
   elif [[ ! -f "${run_root}/config.sha256" ]]; then
     quick_check "${run_root}"
   else
@@ -150,25 +188,29 @@ start_service() {
     calibrate_run "${run_root}"
   fi
 
-  bash "${V2_SERVICE}" model start --run "${run_root}"
-  bash "${V2_SERVICE}" stream start --run "${run_root}"
-  bash "${V2_SERVICE}" viewer start --run "${run_root}"
+  bash "${RUNTIME_SERVICE}" model start --run "${run_root}"
+  bash "${RUNTIME_SERVICE}" stream start --run "${run_root}"
+  bash "${RUNTIME_SERVICE}" viewer start --run "${run_root}"
   printf '\nFINAL SERVICE READY\nRun directory: %s\n' "${run_root}"
 }
 
 command="${1:-}"
 case "${command}" in
+  __full_check)
+    [[ "${2:-}" == "--run" && -n "${3:-}" ]] || exit 2
+    full_check_run "${3}"
+    ;;
   start)
     shift
     start_service "$@"
     ;;
   stop|status)
     shift
-    bash "${V2_SERVICE}" "${command}" "$@"
+    bash "${RUNTIME_SERVICE}" "${command}" "$@"
     ;;
   test)
     shift
-    bash "${V2_SERVICE}" test "$@"
+    bash "${RUNTIME_SERVICE}" test "$@"
     ;;
   -h|--help)
     usage

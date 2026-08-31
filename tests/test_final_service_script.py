@@ -51,6 +51,22 @@ class FinalServiceScriptTests(unittest.TestCase):
         self.assertIn("calibrate_run", source)
         self.assertNotIn("input_args[@]", source)
         self.assertNotIn("03_baseline.sh", source)
+        self.assertIn("RUNTIME_SERVICE", source)
+
+    def test_final_package_contains_runtime_and_maintenance_capabilities(self):
+        final_root = self.repo / "scripts/final_execution"
+        required = (
+            "common.sh",
+            "runtime_service.sh",
+            "lib/capture_stage.py",
+            "lib/runtime_client.py",
+            "lib/run.py",
+            "lib/export_fixture.py",
+        )
+        for relative in required:
+            self.assertTrue((final_root / relative).is_file(), relative)
+        run_source = (final_root / "lib/run.py").read_text(encoding="utf-8")
+        self.assertIn("def command_report", run_source)
 
 if __name__ == "__main__":
     unittest.main()

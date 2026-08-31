@@ -17,7 +17,7 @@ class IdentityNormalizer:
 
 
 class OnlineContinuityProcessor:
-    """V2 companion stitcher using local relative-root correction and SLERP."""
+    """Companion stitcher using local relative-root correction and SLERP."""
 
     def __init__(
         self,
@@ -30,7 +30,7 @@ class OnlineContinuityProcessor:
         relative_root_softness: float = 0.2,
     ):
         if horizon != 150 or hop != 75:
-            raise ValueError("V2 continuity requires 150/75")
+            raise ValueError("continuity requires a 150/75 window/hop")
         self.normalizer = normalizer
         self.horizon = horizon
         self.hop = hop
@@ -66,7 +66,7 @@ class OnlineContinuityProcessor:
         quaternions = matrix_to_quaternion(rotation_6d_to_matrix(rotations))
 
         # The compatibility path remains useful for isolated parameter-stitch
-        # tests. Runtime V2 always supplies the authoritative lead window.
+        # tests. The runtime always supplies the authoritative lead window.
         if lead_motion is None:
             lead_roots = np.zeros_like(roots)
             relative_root = roots

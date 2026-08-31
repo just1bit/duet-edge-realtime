@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one V2 stage command while mirroring its console to one log file."""
+"""Run one service stage while mirroring its console to one log file."""
 
 from __future__ import annotations
 

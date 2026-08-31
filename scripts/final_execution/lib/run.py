@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run-local V2 initialization, calibration, input locking, and reporting."""
+"""Run-local initialization, calibration, input locking, and reporting."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 REALTIME_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_ROOT = REALTIME_ROOT.parent
-STATE_FILE = REALTIME_ROOT / "outputs" / ".run-current"
+STATE_FILE = REALTIME_ROOT / "outputs" / ".final-run-current"
 
 
 def sha256(path: Path) -> str:
@@ -45,9 +45,9 @@ def current_run(value: str | None) -> Path:
     elif STATE_FILE.is_file():
         run = Path(STATE_FILE.read_text(encoding="utf-8").strip()).resolve()
     else:
-        raise SystemExit("Initialize a V2 run with Stage 01.")
+        raise SystemExit("Initialize a run before starting the service.")
     if not (run / "config.json").is_file():
-        raise SystemExit(f"V2 run has no config.json: {run}")
+        raise SystemExit(f"Run has no config.json: {run}")
     return run
 
 
@@ -438,7 +438,7 @@ def command_report(args) -> None:
     result = {"passed": passed, "backend": backend, "frames": len(frames), "duration_s": duration_s, "checks": checks}
     write_json(run / "gate-results.json", result)
     report = [
-        "# Duet-EDGE Realtime V2 Run Report", "",
+        "# Duet-EDGE Realtime Final Run Report", "",
         f"- Run: `{run.name}`", f"- Backend: `{backend}`",
         f"- Frames: `{len(frames)}`", f"- Duration: `{duration_s:.3f} s`",
         f"- Gate result: `{'PASS' if passed else 'REVIEW'}`", "",

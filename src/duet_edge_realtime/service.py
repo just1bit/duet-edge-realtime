@@ -643,7 +643,7 @@ async def _record_startup_failure(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Duet-EDGE V2 streaming service")
+    parser = argparse.ArgumentParser(description="Duet-EDGE streaming service")
     parser.add_argument("--config", default="configs/example.json")
     parser.add_argument("--backend", choices=("fake", "recorded", "cuda"))
     parser.add_argument("--input")
@@ -660,7 +660,7 @@ def _parse_args() -> argparse.Namespace:
         "--sink", default="ndjson", help="comma-separated: ndjson,websocket,web"
     )
     parser.add_argument("--output-dir")
-    parser.add_argument("--run-dir", help="write directly into an initialized V2 run")
+    parser.add_argument("--run-dir", help="write directly into an initialized run")
     parser.add_argument("--run-id")
     parser.add_argument("--loop", type=int, default=1)
     parser.add_argument("--fake-delay-s", type=float, default=0.0)
@@ -734,7 +734,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         occupied = [name for name in ("summary.json", "stream.ndjson") if (output_dir / name).exists()]
         if occupied:
-            raise SystemExit(f"refusing to overwrite V2 run artifacts: {occupied}")
+            raise SystemExit(f"refusing to overwrite run artifacts: {occupied}")
     else:
         output_dir = Path(output_base) / run_id
         if output_dir.exists():

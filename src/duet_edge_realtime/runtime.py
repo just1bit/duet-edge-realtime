@@ -500,7 +500,7 @@ class RuntimeDaemon:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Duet-EDGE resident V2 runtime")
+    parser = argparse.ArgumentParser(description="Duet-EDGE resident runtime")
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--log-level", default="INFO")

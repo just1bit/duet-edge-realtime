@@ -102,7 +102,7 @@ class StreamConfig:
         if self.fps <= 0:
             raise ValueError("stream.fps must be positive")
         if self.window_frames != 150 or self.hop_frames != 75:
-            raise ValueError("V2 requires stream.window_frames=150 and hop_frames=75")
+            raise ValueError("stream.window_frames must be 150 and hop_frames must be 75")
         if self.playout_delay_s < 0:
             raise ValueError("stream.playout_delay_s must be non-negative")
         if self.inference_queue_size < 1:

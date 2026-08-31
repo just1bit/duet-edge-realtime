@@ -53,7 +53,7 @@ Every `frame` includes:
 
 `frame_id` is contiguous and each source frame is committed once. Commit intervals
 are half-open. `stable` identifies a resolved 75-frame region and `tail` identifies
-the valid EOF tail. `joints` remains an alias of `companion_joints` for V1 clients.
+the valid EOF tail. `joints` remains an alias of `companion_joints` for compatibility.
 
 The authoritative lead skeleton comes directly from FK of the canonical source
 timeline. Companion joints come from causal-overlap generation followed by local

@@ -21,7 +21,7 @@ from duet_edge_realtime.progress import TerminalProgress
 from duet_edge_realtime.sinks import StaticWebSink
 
 
-class V2FeatureTests(unittest.TestCase):
+class ServiceFeatureTests(unittest.TestCase):
     def test_captured_progress_uses_tty_and_distinct_bar_styles(self):
         class FakeTTY(io.StringIO):
             def isatty(self):
@@ -50,7 +50,7 @@ class V2FeatureTests(unittest.TestCase):
             result = subprocess.run([
                 sys.executable,
                 str(Path(__file__).parents[1] /
-                    "scripts/v2_execution/lib/capture_stage.py"),
+                    "scripts/final_execution/lib/capture_stage.py"),
                 "--stage", "05", "--run-root", str(run),
                 "--state-file", str(run / "state"), "--",
                 sys.executable, "-c",
@@ -71,7 +71,7 @@ class V2FeatureTests(unittest.TestCase):
             result = subprocess.run([
                 sys.executable,
                 str(Path(__file__).parents[1] /
-                    "scripts/v2_execution/lib/capture_stage.py"),
+                    "scripts/final_execution/lib/capture_stage.py"),
                 "--stage", "05", "--run-root", str(run),
                 "--state-file", str(run / "state"), "--",
                 sys.executable, "-c",
@@ -94,7 +94,7 @@ class V2FeatureTests(unittest.TestCase):
             result = subprocess.run([
                 sys.executable,
                 str(Path(__file__).parents[1] /
-                    "scripts/v2_execution/lib/capture_stage.py"),
+                    "scripts/final_execution/lib/capture_stage.py"),
                 "--stage", "01", "--state-file", str(state), "--",
                 sys.executable, "-c", child,
             ], text=True, capture_output=True, check=False)
@@ -116,7 +116,7 @@ class V2FeatureTests(unittest.TestCase):
             })
             result = subprocess.run([
                 "bash",
-                str(Path(__file__).parents[1] / "scripts/v2_execution/service.sh"),
+                str(Path(__file__).parents[1] / "scripts/final_execution/runtime_service.sh"),
                 "model", "start", "--run", str(run),
             ], text=True, capture_output=True, check=False, env=environment)
             self.assertEqual(result.returncode, 0)
@@ -125,7 +125,7 @@ class V2FeatureTests(unittest.TestCase):
 
     def test_runtime_client_accepts_null_session_progress(self):
         client = runpy.run_path(str(
-            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+            Path(__file__).parents[1] / "scripts/final_execution/lib/runtime_client.py"
         ))
         self.assertIsNone(client["session_ratio"]({
             "session": {"progress": None},
@@ -133,7 +133,7 @@ class V2FeatureTests(unittest.TestCase):
 
     def test_runtime_client_rejects_a_different_run_before_mutation(self):
         client = runpy.run_path(str(
-            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+            Path(__file__).parents[1] / "scripts/final_execution/lib/runtime_client.py"
         ))
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp) / "run-current"
@@ -173,7 +173,7 @@ class V2FeatureTests(unittest.TestCase):
 
     def test_runtime_client_flushes_waits_and_falls_back_to_model_progress(self):
         client = runpy.run_path(str(
-            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+            Path(__file__).parents[1] / "scripts/final_execution/lib/runtime_client.py"
         ))
         event = {
             "phase": "inference", "window": 2, "windows": 8,
@@ -204,7 +204,7 @@ class V2FeatureTests(unittest.TestCase):
 
     def test_runtime_wait_can_restore_final_status_json_without_extra_request(self):
         client = runpy.run_path(str(
-            Path(__file__).parents[1] / "scripts/v2_execution/lib/runtime_client.py"
+            Path(__file__).parents[1] / "scripts/final_execution/lib/runtime_client.py"
         ))
         status = {
             "model": {"state": "ready", "progress": None},

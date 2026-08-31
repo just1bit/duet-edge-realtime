@@ -26,7 +26,7 @@ class NormalizedFixtureAdapter:
         if motion.ndim != 2 or motion.shape[1] != 151:
             raise ValueError(f"fixture motion must be [N,151], got {motion.shape}")
         if len(motion) < 150:
-            raise ValueError("V2 fixture must contain at least 150 frames")
+            raise ValueError("fixture must contain at least 150 frames")
         if not np.isfinite(motion).all():
             raise ValueError("fixture contains NaN/Inf")
         self.motion = motion
@@ -132,7 +132,7 @@ class AISTFileReplayAdapter:
             "timeline_schema": sidecar.get("schema"),
         }
         if len(self.motion) < 150:
-            raise ValueError("V2 AIST motion must contain at least 150 frames after downsampling")
+            raise ValueError("AIST motion must contain at least 150 frames after downsampling")
 
     def frames(self) -> Iterator[MotionFrame]:
         seq = 0

@@ -28,13 +28,10 @@ playout, evidence, and Viewer layers.
 
 ## Operation and reference
 
-Follow the [V2 operation manual](V2_EXECUTION_MANUAL.md) for the current
-environment setup, Stage commands, execution order, expected artifacts, and
-acceptance procedure.
+Follow the [Final service manual](FINAL_SERVICE_MANUAL.md) for environment setup,
+service commands, input execution, outputs, and troubleshooting.
 
-The wire contract is documented in [PROTOCOL.md](PROTOCOL.md). The architecture,
-quality gates, and definition of done are recorded in
-[V2_REALTIME_PLAN.md](V2_REALTIME_PLAN.md).
+The wire contract is documented in [PROTOCOL.md](PROTOCOL.md).
 
 The optional camera-to-model path is documented in
 [MEDIAPIPE_INPUT.md](MEDIAPIPE_INPUT.md).

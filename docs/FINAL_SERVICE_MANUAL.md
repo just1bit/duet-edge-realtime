@@ -18,7 +18,7 @@ outputs/run-.../
 └── evidence/
 ```
 
-默认复用 `outputs/.run-current` 指向的运行。也可以通过 `--run outputs/run-...` 指定已有运行。
+默认复用 `outputs/.final-run-current` 指向的运行。也可以通过 `--run outputs/run-...` 指定已有运行。
 
 ## 2. 服务操作
 

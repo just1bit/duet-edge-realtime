@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-V2_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-REALTIME_ROOT="$(CDPATH= cd -- "${V2_SCRIPT_DIR}/../.." && pwd -P)"
+FINAL_SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REALTIME_ROOT="$(CDPATH= cd -- "${FINAL_SCRIPT_DIR}/../.." && pwd -P)"
 PROJECT_ROOT="$(dirname -- "${REALTIME_ROOT}")"
 PYTHON_BIN="${PYTHON_BIN:-${REALTIME_ROOT}/.venv/bin/python3}"
-STATE_FILE="${REALTIME_ROOT}/outputs/.run-current"
+STATE_FILE="${REALTIME_ROOT}/outputs/.final-run-current"
 
 STAGE_NUMBER=""
 STAGE_TITLE=""
@@ -26,7 +26,7 @@ stage_capture() {
   fi
   set +e
   STAGE_CAPTURE_ACTIVE=1 "${PYTHON_BIN}" \
-    "${V2_SCRIPT_DIR}/lib/capture_stage.py" "${capture_args[@]}" -- \
+    "${FINAL_SCRIPT_DIR}/lib/capture_stage.py" "${capture_args[@]}" -- \
     bash "$0" "${original_args[@]}"
   status="$?"
   set -e

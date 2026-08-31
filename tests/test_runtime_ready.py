@@ -26,19 +26,14 @@ def available_port() -> int:
 
 
 class RuntimeReadyTests(unittest.TestCase):
-    def test_manual_stage_order_matches_service_layout(self):
+    def test_final_manual_matches_service_layout(self):
         repo = Path(__file__).resolve().parents[1]
-        manual = (repo / "docs" / "V2_EXECUTION_MANUAL.md").read_text()
-        self.assertEqual(
-            re.findall(r"^### Stage (\d{2})", manual, flags=re.MULTILINE),
-            ["01", "02", "03", "04", "05", "06", "07", "09", "10"],
-        )
-        self.assertIn("### Stage 07&08", manual)
-        scripts = sorted(
-            path.name for path in (repo / "scripts" / "v2_execution").glob("[0-9][0-9]_*.sh")
-        )
-        self.assertEqual([name[:2] for name in scripts], ["01", "02", "03", "09", "10"])
-        self.assertTrue((repo / "scripts/v2_execution/service.sh").is_file())
+        manual = (repo / "docs" / "FINAL_SERVICE_MANUAL.md").read_text()
+        for command in ("start", "status", "test", "stop"):
+            self.assertIn(f"service.sh {command}", manual)
+        self.assertTrue((repo / "scripts/final_execution/service.sh").is_file())
+        self.assertTrue((repo / "scripts/final_execution/runtime_service.sh").is_file())
+        self.assertTrue((repo / "scripts/final_execution/lib/run.py").is_file())
 
     def test_components_wait_until_locked_input_is_started(self):
         async def scenario(root: Path):
@@ -119,7 +114,7 @@ class RuntimeReadyTests(unittest.TestCase):
             asyncio.run(scenario(root))
             report = subprocess.run([
                 sys.executable,
-                "scripts/v2_execution/lib/run.py",
+                "scripts/final_execution/lib/run.py",
                 "report",
                 "--run", str(root),
             ], cwd=repo, text=True, capture_output=True)
@@ -147,7 +142,7 @@ class RuntimeReadyTests(unittest.TestCase):
             }), encoding="utf-8")
             result = subprocess.run([
                 sys.executable,
-                "scripts/v2_execution/lib/run.py",
+                "scripts/final_execution/lib/run.py",
                 "calibrate",
                 "--run", str(run),
                 "--summary", str(summary),
