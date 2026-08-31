@@ -15,7 +15,7 @@ from .backends.fake import FakeInferenceBackend
 from .backends.recorded import RecordedInferenceBackend
 from .config import RealtimeConfig
 from .input_adapters import AISTFileReplayAdapter, NormalizedFixtureAdapter
-from .mediapipe_input import MediaPipeCameraAdapter
+from .mediapipe_bridge import INGEST_HOST, RemoteMediaPipeSource
 from .playout import RealtimeClock
 from .schemas import PROTOCOL_NAME, SCHEMA_VERSION
 from .service import StreamingService
@@ -72,12 +72,14 @@ class RuntimeDaemon:
         self.stream_state = "stopped"
         self.viewer_state = "stopped"
         self.session_state = "idle"
+        self.input_mode = self.config.input.mode
         self.session_id: str | None = None
         self.error: str | None = None
         self.warmup_ms: float | None = None
         self.active_service: StreamingService | None = None
         self.session_task: asyncio.Task | None = None
         self.control_server = None
+        self.ingest_server = None
         self.websocket_sink: WebSocketSink | None = None
         self.web_sink: StaticWebSink | None = None
         self.shutdown_event = asyncio.Event()
@@ -93,7 +95,7 @@ class RuntimeDaemon:
         if self.active_service is not None:
             total_frames = None
             manifest_path = self.run_dir / "input-manifest.json"
-            if self.config.input.mode != "mediapipe" and manifest_path.is_file():
+            if self.input_mode != "mediapipe" and manifest_path.is_file():
                 try:
                     total_frames = json.loads(
                         manifest_path.read_text(encoding="utf-8")
@@ -124,6 +126,23 @@ class RuntimeDaemon:
                     if self.viewer_state == "ready" else None
                 ),
             },
+            "input": {
+                "mode": self.input_mode,
+                "ingest": (
+                    self.active_service.source.status()
+                    if self.active_service is not None
+                    and hasattr(self.active_service.source, "status")
+                    else {
+                        "state": (
+                            "waiting" if self.input_mode == "mediapipe" else "inactive"
+                        )
+                    }
+                ),
+                "endpoint": (
+                    f"{INGEST_HOST}:{self.config.ingest_port}"
+                    if self.input_mode == "mediapipe" else None
+                ),
+            },
             "session": {
                 "state": self.session_state,
                 "session_id": self.session_id,
@@ -139,7 +158,30 @@ class RuntimeDaemon:
         self.control_server = await asyncio.start_server(
             self._handle_control, self.config.bind_host, self.config.control_port
         )
+        self.ingest_server = await asyncio.start_server(
+            self._handle_ingest,
+            INGEST_HOST,
+            self.config.ingest_port,
+            limit=64 * 1024,
+        )
         self.persist_status()
+
+    async def _handle_ingest(self, reader, writer) -> None:
+        source = (
+            self.active_service.source
+            if self.input_mode == "mediapipe" and self.active_service is not None
+            else None
+        )
+        if not isinstance(source, RemoteMediaPipeSource):
+            writer.write(json.dumps({
+                "type": "error",
+                "error": "service is not waiting in mediapipe mode",
+            }, separators=(",", ":")).encode() + b"\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+        await source.accept(reader, writer)
 
     async def initialize_model(self) -> None:
         started = time.perf_counter()
@@ -327,6 +369,8 @@ class RuntimeDaemon:
             self.model_state == self.stream_state == self.viewer_state == "ready"
         ):
             raise RuntimeError("model, stream and viewer must all be ready")
+        if self.input_mode != "file":
+            raise RuntimeError("test input requires file mode")
         if (self.run_dir / "summary.json").exists() or (self.run_dir / "stream.ndjson").exists():
             raise RuntimeError("formal run artifacts already exist")
         self.session_id = f"{self.run_id}:formal"
@@ -335,20 +379,67 @@ class RuntimeDaemon:
         self.persist_status()
         self.session_task = asyncio.create_task(self._prepare_and_run_session())
 
+    async def set_input_mode(self, mode: str) -> None:
+        if mode not in {"file", "mediapipe"}:
+            raise ValueError("input mode must be file or mediapipe")
+        if mode == self.input_mode:
+            if mode == "mediapipe" and (
+                self.session_task is None or self.session_task.done()
+            ):
+                await self._start_mediapipe_session()
+            return
+        if self.active_service is not None:
+            if not getattr(self.active_service.source, "is_live", False):
+                raise RuntimeError("cannot switch input mode while a file test is running")
+            self.active_service.source.stop()
+            if self.session_task is not None:
+                await self.session_task
+        elif self.session_task is not None and not self.session_task.done():
+            self.session_task.cancel()
+            await asyncio.gather(self.session_task, return_exceptions=True)
+        previous_mode = self.input_mode
+        self.input_mode = mode
+        self.session_state = "idle"
+        self.session_id = None
+        self.error = None
+        if mode == "mediapipe":
+            try:
+                await self._start_mediapipe_session()
+            except Exception:
+                self.input_mode = previous_mode
+                self.persist_status()
+                raise
+        self.persist_status()
+
+    async def _start_mediapipe_session(self) -> None:
+        if self.config.backend != "cuda" or self.backend is None:
+            raise RuntimeError("MediaPipe input requires the CUDA backend")
+        if not (
+            self.model_state == self.stream_state == self.viewer_state == "ready"
+        ):
+            raise RuntimeError("model, stream and viewer must all be ready")
+        if (self.run_dir / "summary.json").exists() or (
+            self.run_dir / "stream.ndjson"
+        ).exists():
+            raise RuntimeError("clear previous session artifacts before mediapipe mode")
+        self.session_id = f"{self.run_id}:mediapipe"
+        self.session_state = "preparing"
+        self.error = None
+        self.persist_status()
+        self.session_task = asyncio.create_task(self._prepare_and_run_session())
+
     async def _prepare_and_run_session(self) -> None:
         try:
-            if self.config.input.mode == "mediapipe":
+            if self.input_mode == "mediapipe":
                 if self.config.backend != "cuda" or self.backend is None:
                     raise RuntimeError("MediaPipe input requires the CUDA backend")
-                config = self.config
-                source = MediaPipeCameraAdapter(
-                    config.paths.mediapipe_model,
+                config = replace(
+                    self.config,
+                    input=replace(self.config.input, mode="mediapipe"),
+                )
+                source = RemoteMediaPipeSource(
                     self.backend.edge.normalizer,
-                    camera_index=config.input.camera_index,
                     fps=config.fps,
-                    width=config.input.camera_width,
-                    height=config.input.camera_height,
-                    maximum_missing_s=config.input.maximum_missing_s,
                 )
             else:
                 manifest = await asyncio.to_thread(self._load_input_manifest)
@@ -413,7 +504,9 @@ class RuntimeDaemon:
                 "session_id": self.session_id,
                 **config.as_dict(),
             })
-            self.session_state = "running"
+            self.session_state = (
+                "waiting_input" if self.input_mode == "mediapipe" else "running"
+            )
             self.persist_status()
             await self.active_service.run()
             self.session_state = "finished"
@@ -455,6 +548,9 @@ class RuntimeDaemon:
                 await self.stop_session()
                 status_code = 202
                 payload = self.status()
+            elif method == "POST" and path in {"/mode/file", "/mode/mediapipe"}:
+                await self.set_input_mode(path.rsplit("/", 1)[-1])
+                payload = self.status()
             elif method == "POST" and path == "/shutdown":
                 self.shutdown_event.set()
                 payload = self.status()
@@ -494,6 +590,10 @@ class RuntimeDaemon:
             self.control_server.close()
             await self.control_server.wait_closed()
             self.control_server = None
+        if self.ingest_server is not None:
+            self.ingest_server.close()
+            await self.ingest_server.wait_closed()
+            self.ingest_server = None
         if self.backend is not None:
             self.backend.close()
             self.backend = None

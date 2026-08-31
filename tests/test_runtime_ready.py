@@ -52,6 +52,7 @@ class RuntimeReadyTests(unittest.TestCase):
                     "port": available_port(),
                     "web_port": available_port(),
                     "control_port": available_port(),
+                    "ingest_port": available_port(),
                     "web_root": str(web_root),
                 },
             }), encoding="utf-8")

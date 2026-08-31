@@ -86,7 +86,7 @@ def command_init(args) -> None:
         counter += 1
     for relative in ("logs", "evidence", "fixtures"):
         (run / relative).mkdir(parents=True, exist_ok=True)
-    for key in ("duet_edge_root", "checkpoint", "input_motion"):
+    for key in ("duet_edge_root", "checkpoint", "input_motion", "mediapipe_model"):
         value = config.get("paths", {}).get(key)
         if value:
             config["paths"][key] = str(resolve_path(value))

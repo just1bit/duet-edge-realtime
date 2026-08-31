@@ -10,6 +10,7 @@ Usage:
   $0 model start [--run RUN_ROOT]
   $0 stream start [--run RUN_ROOT]
   $0 viewer start [--run RUN_ROOT]
+  $0 mode file|mediapipe [--run RUN_ROOT]
   $0 test [INPUT] [--root-scaled true|false] [--run RUN_ROOT]
   $0 status [--run RUN_ROOT]
   $0 stop [--run RUN_ROOT]
@@ -133,10 +134,50 @@ required = ("model", "stream", "viewer")
 not_ready = [name for name in required if status.get(name, {}).get("state") != "ready"]
 if not_ready:
     raise SystemExit("Services not ready: " + ", ".join(not_ready))
+if status.get("input", {}).get("mode") != "file":
+    raise SystemExit("PKL test requires file mode; run service.sh mode file first")
 session_state = status.get("session", {}).get("state")
 if session_state in {"preparing", "starting", "running"}:
     raise SystemExit("A formal test is already in progress: " + session_state)
 '
+}
+
+mode_stage() {
+  local mode="${1:-}" run=""
+  shift || true
+  [[ "${mode}" == "file" || "${mode}" == "mediapipe" ]] || {
+    usage
+    return 2
+  }
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --run) run="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  stage_begin "09" "Input Mode · ${mode}"
+  load_run "${run}"
+  local status_json
+  status_json="$(runtime_client status)"
+  printf '%s\n' "${status_json}" | "${PYTHON_BIN}" -c '
+import json, sys
+status = json.load(sys.stdin)
+session = status.get("session", {}).get("state")
+if session in {"preparing", "starting", "running"}:
+    raise SystemExit("Cannot switch input mode while a file test is running")
+'
+  if [[ "${mode}" == "mediapipe" ]]; then
+    clear_formal_outputs
+  fi
+  runtime_client mode "${mode}"
+  runtime_client wait \
+    --field input.mode --value "${mode}" --timeout 30 \
+    --label "Switching input mode to ${mode}"
+  if [[ "${mode}" == "mediapipe" ]]; then
+    stage_step "Service is waiting for an independent MediaPipe producer"
+  else
+    stage_step "Service is ready for PKL test input"
+  fi
 }
 
 clear_formal_outputs() {
@@ -207,6 +248,7 @@ if [[ "${1:-}" == "__stage" ]]; then
     06) viewer_stage "$@" ;;
     07) input_stage "$@" ;;
     08) run_stage "$@" ;;
+    09) mode_stage "$@" ;;
     *) usage; exit 2 ;;
   esac
   exit
@@ -222,6 +264,10 @@ case "${command}" in
       stream) capture_stage "05" "$@" ;;
       viewer) capture_stage "06" "$@" ;;
     esac
+    ;;
+  mode)
+    shift
+    capture_stage "09" "$@"
     ;;
   test)
     shift

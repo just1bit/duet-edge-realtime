@@ -110,7 +110,8 @@ def raw_request(run: Path, method: str, path: str) -> dict:
         data=b"" if method == "POST" else None,
     )
     try:
-        with urllib.request.urlopen(value, timeout=3) as response:
+        timeout_s = 120 if path.startswith("/mode/") else 3
+        with urllib.request.urlopen(value, timeout=timeout_s) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
         payload = json.loads(exc.read())
@@ -140,6 +141,8 @@ def main() -> None:
     sub.add_parser("start-viewer")
     sub.add_parser("start-run")
     sub.add_parser("stop-run")
+    mode = sub.add_parser("mode")
+    mode.add_argument("value", choices=("file", "mediapipe"))
     sub.add_parser("shutdown")
     wait = sub.add_parser("wait")
     wait.add_argument("--field", required=True)
@@ -160,7 +163,10 @@ def main() -> None:
         "shutdown": ("POST", "/shutdown"),
     }
     if args.command != "wait":
-        method, path = endpoints[args.command]
+        if args.command == "mode":
+            method, path = "POST", f"/mode/{args.value}"
+        else:
+            method, path = endpoints[args.command]
         try:
             result = request(run, method, path)
         except RuntimeError as exc:

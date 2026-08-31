@@ -12,7 +12,8 @@ PYTHON_BIN="${PYTHON_BIN:-${REALTIME_ROOT}/.venv/bin/python3}"
 usage() {
   cat >&2 <<EOF
 Usage:
-  $0 start [--run RUN_ROOT | --template CONFIG] [--full-check]
+  $0 start [--run RUN_ROOT | --template CONFIG] [--mode file|mediapipe] [--full-check]
+  $0 mode file|mediapipe [--run RUN_ROOT]
   $0 stop [--run RUN_ROOT]
   $0 status [--run RUN_ROOT]
   $0 test [INPUT.pkl] [--root-scaled true|false] [--run RUN_ROOT]
@@ -25,12 +26,17 @@ active_run() {
 }
 
 quick_check() {
-  local run_root="$1"
+  local run_root="$1" input_mode
   printf '\nFinal service quick check\n'
   "${PYTHON_BIN}" -c 'import duet_edge_realtime, numpy, websockets'
   printf '  - Runtime imports ready\n'
-  "${PYTHON_BIN}" "${RUN_TOOL}" input --run "${run_root}"
-  printf '  - Default input structure ready\n'
+  input_mode="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("input",{}).get("mode","file"))' "${run_root}/config.json")"
+  if [[ "${input_mode}" == "file" ]]; then
+    "${PYTHON_BIN}" "${RUN_TOOL}" input --run "${run_root}"
+    printf '  - Default file input structure ready\n'
+  else
+    printf '  - MediaPipe input is externally managed; file input check skipped\n'
+  fi
   "${PYTHON_BIN}" - "${run_root}/config.json" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
@@ -126,7 +132,7 @@ calibrate_run() {
 }
 
 start_service() {
-  local run_root="" template="" full_check=0
+  local run_root="" template="" requested_mode="" full_check=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --run)
@@ -142,6 +148,15 @@ start_service() {
       --full-check)
         full_check=1
         shift
+        ;;
+      --mode)
+        [[ $# -ge 2 ]] || { printf '%s\n' '--mode requires a value' >&2; return 2; }
+        [[ "$2" == "file" || "$2" == "mediapipe" ]] || {
+          printf '%s\n' '--mode must be file or mediapipe' >&2
+          return 2
+        }
+        requested_mode="$2"
+        shift 2
         ;;
       *)
         printf 'Unknown start option: %s\n' "$1" >&2
@@ -191,6 +206,10 @@ start_service() {
   bash "${RUNTIME_SERVICE}" model start --run "${run_root}"
   bash "${RUNTIME_SERVICE}" stream start --run "${run_root}"
   bash "${RUNTIME_SERVICE}" viewer start --run "${run_root}"
+  if [[ -z "${requested_mode}" ]]; then
+    requested_mode="$("${PYTHON_BIN}" -c 'import json,sys;print(json.load(open(sys.argv[1])).get("input",{}).get("mode","file"))' "${run_root}/config.json")"
+  fi
+  bash "${RUNTIME_SERVICE}" mode "${requested_mode}" --run "${run_root}"
   printf '\nFINAL SERVICE READY\nRun directory: %s\n' "${run_root}"
 }
 
@@ -204,7 +223,7 @@ case "${command}" in
     shift
     start_service "$@"
     ;;
-  stop|status)
+  stop|status|mode)
     shift
     bash "${RUNTIME_SERVICE}" "${command}" "$@"
     ;;

@@ -136,6 +136,7 @@ class ServerConfig:
     port: int = 8765
     web_port: int = 8080
     control_port: int = 8766
+    ingest_port: int = 8767
     web_root: str = "web"
 
     def __post_init__(self) -> None:
@@ -145,8 +146,12 @@ class ServerConfig:
             raise ValueError("server.web_port must be in [1, 65535]")
         if not 1 <= self.control_port <= 65535:
             raise ValueError("server.control_port must be in [1, 65535]")
-        if len({self.port, self.web_port, self.control_port}) != 3:
-            raise ValueError("server port, web_port and control_port must differ")
+        if not 1 <= self.ingest_port <= 65535:
+            raise ValueError("server.ingest_port must be in [1, 65535]")
+        if len({self.port, self.web_port, self.control_port, self.ingest_port}) != 4:
+            raise ValueError(
+                "server port, web_port, control_port and ingest_port must differ"
+            )
 
 
 @dataclass(frozen=True)
@@ -222,3 +227,5 @@ class RealtimeConfig:
     def web_port(self): return self.server.web_port
     @property
     def control_port(self): return self.server.control_port
+    @property
+    def ingest_port(self): return self.server.ingest_port

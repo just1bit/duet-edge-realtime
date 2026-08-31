@@ -53,6 +53,7 @@
     "port": 8765,
     "web_port": 8080,
     "control_port": 8766,
+    "ingest_port": 8767,
     "web_root": "web"
   }
 }

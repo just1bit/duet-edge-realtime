@@ -1,66 +1,86 @@
-# MediaPipe live input
+# MediaPipe 独立实时输入
 
-The MediaPipe input path is an optional CUDA profile. It leaves the existing
-Duet-EDGE inference, 150/75 windowing, continuity, playout, and wire protocol
-unchanged. The new source performs this conversion before `MotionFrame` ingest:
+MediaPipe 现在是独立于 Final Service 的摄像头 producer。Service 常驻加载模型，producer
+只负责摄像头、Pose Landmarker 和 landmarks 传输；SMPL24 重定向、151 维编码和 checkpoint
+normalization 在 Service 内完成。
 
 ```text
-camera -> MediaPipe world landmarks -> 30 FPS resampling -> SMPL24 retarget
-       -> [4 contacts, 3 root position, 24 x 6D local rotation]
-       -> checkpoint normalization -> MotionFrame.motion_151
+mediapipe.sh
+camera -> MediaPipe world landmarks -> TCP NDJSON ingest
+
+service.sh
+landmarks -> 30 FPS resampling -> SMPL24 retarget -> normalized motion_151
+          -> 150/75 inference windows -> playout -> Viewer
 ```
 
-The hot path does not create a pickle. NDJSON remains the output/evidence record.
+producer 和 Service 使用 `duet-edge-mediapipe/v1` 本机协议。ingest 固定绑定回环地址
+`127.0.0.1`，默认端口为 `8767`，端口可通过 `server.ingest_port` 配置。
 
-## Installation
-
-Install the project with its CUDA and camera extras in the environment used by
-Duet-EDGE:
+## 安装和检查
 
 ```bash
 python -m pip install -e '.[gpu,camera]'
+bash scripts/final_execution/mediapipe.sh doctor
 ```
 
-Download a MediaPipe Pose Landmarker `.task` model and set its path in
-`configs/mediapipe.example.json`, or pass `--mediapipe-model`.
+在运行目录的 `config.json` 中设置 `paths.mediapipe_model`、camera index 和分辨率。可使用
+`configs/mediapipe.example.json` 创建运行目录。
 
-## Direct live run
+## 模块化启动
 
-From the repository root:
+先启动 Service。启动完成不要求 MediaPipe 已经在线：
 
 ```bash
-duet-edge-realtime \
-  --config configs/mediapipe.example.json \
-  --input-format mediapipe \
-  --clock realtime \
-  --sink ndjson,websocket,web \
-  --output-dir outputs \
-  --run-id camera-demo
+bash scripts/final_execution/service.sh start --mode mediapipe
+bash scripts/final_execution/service.sh status
 ```
 
-Open `http://127.0.0.1:8080`. Keep the complete body, especially both hips,
-knees, and ankles, visible. The first generated output appears after the 150-frame
-input window fills plus the configured playout delay (about 5.72 seconds with the
-example configuration).
+此时 `input.mode` 为 `mediapipe`，`input.ingest.state` 为 `waiting`。随后独立启动摄像头：
 
-CLI overrides are available for `--camera-index`, `--camera-width`, and
-`--camera-height`. `MEDIAPIPE_POSE_MODEL` can supply the model path.
+```bash
+bash scripts/final_execution/mediapipe.sh start
+bash scripts/final_execution/mediapipe.sh status
+```
 
-## Resident runtime
+producer 接入后，Service 状态变为 `input.ingest.state=connected`。停止 producer 不会停止或
+重启模型：
 
-The resident runtime selects camera input when `input.mode` is `mediapipe` and
-does not require an input manifest. Start the live session through `/run/start`
-and stop it through `/run/stop`; the bundled runtime client exposes these as
-`start-run` and `stop-run`.
+```bash
+bash scripts/final_execution/mediapipe.sh stop
+```
 
-Stop after at least five seconds of valid tracked input so the first 150-frame
-window exists and the normal draining path can finish.
+Service 回到等待接入状态，可以再次启动 producer。
 
-## Current retargeting boundary
+## 前台调试和排障
 
-This first implementation deliberately uses a fixed horizontal root and derives
-root height from the observed feet. It also regularizes bone twist from the prior
-frame because point landmarks cannot uniquely determine axial joint rotation.
-This is sufficient to exercise the complete live pipeline, but camera/floor
-calibration and a constrained body-model fitter remain the next quality step for
-accurate global locomotion.
+前台运行会直接显示连接、摄像头和 tracking 错误：
+
+```bash
+bash scripts/final_execution/mediapipe.sh debug
+bash scripts/final_execution/mediapipe.sh debug --max-observations 300
+```
+
+后台日志和状态位于当前运行目录：
+
+```text
+logs/mediapipe.log
+evidence/mediapipe-status.json
+mediapipe.pid
+```
+
+producer 可以在 Service 未启动或处于 `file` 模式时独立运行。它会继续执行摄像头检测并将
+连接状态记录为 `waiting_for_service`；Service 切换到 `mediapipe` 后会在后续帧自动接入。
+
+## 切回文件测试
+
+```bash
+bash scripts/final_execution/service.sh mode file
+bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl
+```
+
+切换到 `file` 会结束当前 MediaPipe session，但不会强制停止 producer；若 producer 仍在运行，
+它会进入 `waiting_for_service`。建议不再使用摄像头时单独执行 `mediapipe.sh stop`。
+
+第一段推理输出仍需等待 150 个有效输入帧加 playout delay。当前重定向使用固定水平 root、
+根据脚部估计 root height，并通过前一帧约束骨骼 twist；准确全局移动仍需要后续相机/地面标定
+和约束人体模型拟合。

@@ -19,7 +19,7 @@ class FinalServiceScriptTests(unittest.TestCase):
         help_result = self.run_script(self.service, "--help")
         self.assertEqual(help_result.returncode, 0)
         usage = help_result.stderr
-        for command in ("start", "stop", "status", "test"):
+        for command in ("start", "stop", "status", "test", "mode"):
             self.assertIn(f"service.sh {command}", usage)
         self.assertNotIn("model start", usage)
         self.assertNotIn("stream start", usage)
@@ -53,11 +53,23 @@ class FinalServiceScriptTests(unittest.TestCase):
         self.assertNotIn("03_baseline.sh", source)
         self.assertIn("RUNTIME_SERVICE", source)
 
+        mediapipe = self.repo / "scripts/final_execution/mediapipe.sh"
+        checked = subprocess.run(
+            ["bash", "-n", str(mediapipe)], cwd=self.repo,
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        help_result = self.run_script(mediapipe, "--help")
+        self.assertEqual(help_result.returncode, 0)
+        for command in ("start", "status", "stop", "debug", "doctor"):
+            self.assertIn(f"mediapipe.sh {command}", help_result.stderr)
+
     def test_final_package_contains_runtime_and_maintenance_capabilities(self):
         final_root = self.repo / "scripts/final_execution"
         required = (
             "common.sh",
             "runtime_service.sh",
+            "mediapipe.sh",
             "lib/capture_stage.py",
             "lib/runtime_client.py",
             "lib/run.py",

@@ -300,6 +300,97 @@ class MediaPipeToMotion151:
         return output
 
 
+class MediaPipeLandmarkCamera:
+    """Camera + Pose Landmarker without checkpoint-specific normalization."""
+
+    def __init__(
+        self,
+        model_asset_path: str | Path,
+        *,
+        camera_index: int = 0,
+        width: int | None = None,
+        height: int | None = None,
+        maximum_missing_s: float = 0.5,
+    ):
+        self.model_asset_path = Path(model_asset_path).expanduser().resolve()
+        if not self.model_asset_path.is_file():
+            raise FileNotFoundError(self.model_asset_path)
+        self.camera_index = camera_index
+        self.width = width
+        self.height = height
+        self.maximum_missing_s = maximum_missing_s
+        self._capture = None
+        self._landmarker = None
+        self._last_landmarks: np.ndarray | None = None
+        self._last_pose_time_s: float | None = None
+        self._last_timestamp_ms = -1
+
+    def open(self) -> None:
+        try:
+            import cv2
+            import mediapipe as mp
+        except ImportError as exc:
+            raise RuntimeError(
+                "MediaPipe camera input requires the 'camera' optional dependencies"
+            ) from exc
+        capture = cv2.VideoCapture(self.camera_index)
+        if self.width is not None:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        if self.height is not None:
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not capture.isOpened():
+            capture.release()
+            raise RuntimeError(f"cannot open camera index {self.camera_index}")
+        options = mp.tasks.vision.PoseLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(
+                model_asset_path=str(self.model_asset_path)
+            ),
+            running_mode=mp.tasks.vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self._capture = capture
+        self._landmarker = mp.tasks.vision.PoseLandmarker.create_from_options(options)
+
+    def read_observation(self) -> PoseObservation:
+        import cv2
+        import mediapipe as mp
+
+        if self._capture is None or self._landmarker is None:
+            raise RuntimeError("MediaPipe camera is not open")
+        ok, bgr = self._capture.read()
+        if not ok:
+            raise RuntimeError("camera frame read failed")
+        timestamp_s = time.monotonic()
+        timestamp_ms = max(self._last_timestamp_ms + 1, int(timestamp_s * 1000))
+        self._last_timestamp_ms = timestamp_ms
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self._landmarker.detect_for_video(image, timestamp_ms)
+        if result.pose_world_landmarks:
+            self._last_landmarks = np.asarray([
+                [item.x, item.y, item.z, getattr(item, "visibility", 1.0)]
+                for item in result.pose_world_landmarks[0]
+            ], dtype=np.float32)
+            self._last_pose_time_s = timestamp_s
+        if self._last_landmarks is None or self._last_pose_time_s is None:
+            raise PoseUnavailable("no pose detected")
+        if timestamp_s - self._last_pose_time_s > self.maximum_missing_s:
+            raise PoseUnavailable("pose has been missing too long")
+        return PoseObservation(timestamp_s, self._last_landmarks)
+
+    def close(self) -> None:
+        if self._landmarker is not None:
+            self._landmarker.close()
+            self._landmarker = None
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
+
+
 class MediaPipeCameraAdapter:
     """Async fixed-rate MotionFrame source backed by a local camera."""
 

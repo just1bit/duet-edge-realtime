@@ -26,6 +26,7 @@ outputs/run-.../
 
 ```bash
 bash scripts/final_execution/service.sh start
+bash scripts/final_execution/service.sh mode file|mediapipe
 bash scripts/final_execution/service.sh status
 bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl
 bash scripts/final_execution/service.sh stop
@@ -35,7 +36,8 @@ bash scripts/final_execution/service.sh stop
 
 ```bash
 bash scripts/final_execution/service.sh start \
-  [--run outputs/run-... | --template /path/to/config.json] [--full-check]
+  [--run outputs/run-... | --template /path/to/config.json] \
+  [--mode file|mediapipe] [--full-check]
 ```
 
 首次运行或指定 `--template` 时，`start` 自动完成：
@@ -49,6 +51,9 @@ bash scripts/final_execution/service.sh start \
 
 已有运行包含 `config.sha256` 时，`start` 复用校准结果并直接进入服务启动。成功后 Model、
 Stream、Viewer 均为 `ready`，系统进入等待输入状态。
+
+`--mode` 可以覆盖配置中的初始输入模式。`file` 模式等待 `test` 输入；`mediapipe` 模式启动
+独立 ingest listener 并等待 producer 接入，启动成功不依赖 producer 是否在线。
 
 首次发布、依赖或代码升级、故障排查时可启用完整检查：
 
@@ -76,8 +81,18 @@ bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl \
 检查服务是否 Ready，随后校验并锁定 PKL 输入、注入服务并等待本次运行结束。省略路径时使用
 `config.json` 中的 `paths.input_motion`。
 
-输入控制与服务生命周期相互独立。MediaPipe 可通过输入适配器或对应输入参数接入
-`start / status / test / stop` 服务接口。
+`test` 只允许在 `file` 模式执行。输入模式可在模型常驻期间切换：
+
+```bash
+bash scripts/final_execution/service.sh mode file
+bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl
+
+bash scripts/final_execution/service.sh mode mediapipe
+bash scripts/final_execution/mediapipe.sh start
+```
+
+MediaPipe producer 使用独立的 `start / status / stop / debug / doctor` 生命周期。producer
+停止或断开时 Service 保持运行并等待重新接入，详情见 `docs/MEDIAPIPE_INPUT.md`。
 
 ### stop
 
@@ -91,6 +106,7 @@ bash scripts/final_execution/service.sh stop [--run outputs/run-...]
 
 ```bash
 bash scripts/final_execution/service.sh start
+bash scripts/final_execution/service.sh mode file
 bash scripts/final_execution/service.sh status
 bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl
 bash scripts/final_execution/service.sh stop
