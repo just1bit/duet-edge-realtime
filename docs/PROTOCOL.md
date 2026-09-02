@@ -11,13 +11,14 @@ Viewer pre-session: hello + state(waiting_for_input)
 Formal session:
 hello
 state(starting -> buffering -> playing -> draining -> finished)
-frame / metrics / degraded / backpressure ...
+input_status / frame / metrics / degraded / backpressure ...
 eos
 ```
 
-A Viewer that connects after Stage 06 receives the pre-session state. Stage 08
-publishes a complete session `hello` before the formal lifecycle begins. The NDJSON
-recording starts with that complete session `hello` and contains no pre-session data.
+A Viewer that connects after the Viewer service starts receives the pre-session state.
+Starting a file or MediaPipe session publishes a complete session `hello` before the
+formal lifecycle begins. The NDJSON recording starts with that complete session
+`hello` and contains no pre-session data.
 
 A failed session publishes `state(failed)` followed by `error`. The NDJSON file
 retains every frame committed before that event.
@@ -30,13 +31,18 @@ retains every frame committed before that event.
 - `backend`, `backend_badge`, `model_mode`, checkpoint name/hash, guidance, and
   sampling steps;
 - causal-overlap residency and continuity-correction mode;
-- source timeline identity, path, hash, selected frame range, and clip count;
+- input mode plus source timeline identity, path, hash, selected frame range, and
+  clip count;
 - 30 FPS, 24-joint hierarchy, right-handed Z-up coordinates, and latency budget;
 - recorder, Viewer, queue, and exactly-once delivery semantics.
 
-The fixed latency is `(window_frames - 1) / fps + playout_delay_s`. Stage 03
-automatically finalizes `playout_delay_s` from the real-clock baseline; the Viewer
+The fixed latency is `(window_frames - 1) / fps + playout_delay_s`. Startup
+calibration finalizes `playout_delay_s` from the real-clock baseline; the Viewer
 render buffer is additional.
+
+For a live MediaPipe source, file-specific source metadata such as `path`, `sha256`,
+`end_frame`, and `clip_id` can be `null`. `input_mode` and the source identity identify
+the live session.
 
 ## `frame`
 
@@ -65,6 +71,7 @@ and FK.
 | Type | Purpose |
 |---|---|
 | `state` | Service lifecycle |
+| `input_status` | MediaPipe pose availability (`input_mode`, `pose_usable`) |
 | `metrics` | Inference, queues, jitter, clients, frame age, and render health |
 | `backpressure` | Bounded input waiting for inference capacity |
 | `overload` | Queue policy event |

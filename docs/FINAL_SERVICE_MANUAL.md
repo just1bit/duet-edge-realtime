@@ -1,6 +1,6 @@
 # Duet-EDGE Realtime Final 服务操作手册
 
-Final 服务入口覆盖首次准备、日常启动、状态查询、输入运行和有序停止。
+Final 服务入口覆盖首次准备、日常启动、文件与 MediaPipe 输入切换、状态查询和有序停止。
 
 ## 1. 环境安装
 
@@ -13,7 +13,7 @@ source .venv/bin/activate
 python3 -m pip install -U pip
 ```
 
-只运行本地开发和自动化检查时，安装基础依赖：
+本地开发和自动化检查使用基础依赖：
 
 ```bash
 python3 -m pip install -e '.[local]'
@@ -28,7 +28,7 @@ python3 -m pip install -e '.[gpu]'
 python3 -m pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
 ```
 
-需要 MediaPipe 摄像头输入时，完成上述 GPU 环境安装后再加入 camera 依赖：
+MediaPipe 摄像头输入在完成上述 GPU 环境安装后加入 camera 依赖：
 
 ```bash
 python3 -m pip install -e '.[gpu,camera]'
@@ -49,6 +49,8 @@ outputs/run-.../
 ```
 
 默认复用 `outputs/.final-run-current` 指向的运行。也可以通过 `--run outputs/run-...` 指定已有运行。
+首次以摄像头作为默认输入时，使用 `configs/mediapipe.example.json` 模板，并按实际路径设置
+`paths.duet_edge_root`、`paths.checkpoint` 和 `paths.mediapipe_model`。
 
 ## 2. 服务操作
 
@@ -99,7 +101,8 @@ bash scripts/final_execution/service.sh start --full-check
 bash scripts/final_execution/service.sh status [--run outputs/run-...]
 ```
 
-返回 Model、Stream、Viewer 和当前 session 状态。
+返回 Model、Stream、Viewer、当前输入模式、MediaPipe ingest 和 session 状态。Viewer 就绪后，
+`viewer.url` 给出浏览器访问地址；默认地址为 `http://127.0.0.1:8080`。
 
 ### test
 
@@ -111,7 +114,7 @@ bash scripts/final_execution/service.sh test /absolute/path/to/input.pkl \
 检查服务是否 Ready，随后校验并锁定 PKL 输入、注入服务并等待本次运行结束。省略路径时使用
 `config.json` 中的 `paths.input_motion`。
 
-`test` 只允许在 `file` 模式执行。输入模式可在模型常驻期间切换：
+`test` 用于 `file` 模式。输入模式可在模型常驻期间切换：
 
 ```bash
 bash scripts/final_execution/service.sh mode file
@@ -124,6 +127,10 @@ bash scripts/final_execution/mediapipe.sh start
 MediaPipe producer 使用独立的 `start / status / stop / debug / doctor` 生命周期。producer
 停止或断开时 Service 保持运行并等待重新接入，详情见 `docs/MEDIAPIPE_INPUT.md`。
 
+切换到 `mediapipe` 时，服务会为新的实时会话清理当前运行目录中的正式会话产物，包括
+`effective_config.json`、`summary.json` 和 `stream.ndjson`。需要长期保留的文件会话结果可在切换前
+复制运行目录，或为摄像头创建单独的运行目录。
+
 ### stop
 
 ```bash
@@ -132,7 +139,9 @@ bash scripts/final_execution/service.sh stop [--run outputs/run-...]
 
 请求 Runtime 有序停止并释放模型和 GPU 资源。
 
-## 3. 推荐操作顺序
+## 3. 常用操作顺序
+
+### 文件输入
 
 ```bash
 bash scripts/final_execution/service.sh start
@@ -144,12 +153,33 @@ bash scripts/final_execution/service.sh stop
 
 服务持续运行期间可以串行执行多次 `test`；每次测试 session 完成后继续等待下一次输入。
 
+### MediaPipe 实时输入
+
+首次创建摄像头运行：
+
+```bash
+bash scripts/final_execution/service.sh start \
+  --template configs/mediapipe.example.json --mode mediapipe
+bash scripts/final_execution/mediapipe.sh doctor
+bash scripts/final_execution/mediapipe.sh start
+bash scripts/final_execution/service.sh status
+```
+
+复用已准备的运行时，可直接执行：
+
+```bash
+bash scripts/final_execution/service.sh mode mediapipe
+bash scripts/final_execution/mediapipe.sh start
+```
+
+Viewer 会依次显示等待姿态、准备首段输出和实时播放状态。姿态短暂不可用时画面进入暂停提示；
+检测恢复后继续生成，无需重启模型。
+
 ## 4. 输出与排障
 
-每次 `test` 的主要结果写入所选运行目录：
+会话的主要结果写入所选运行目录：
 
 ```text
-input-manifest.json
 effective_config.json
 summary.json
 stream.ndjson
@@ -157,4 +187,11 @@ logs/
 evidence/
 ```
 
-启动或输入异常时，先执行 `status`，再查看运行目录中的 `logs/runtime.log` 和对应服务日志。
+文件会话还会生成 `input-manifest.json`，记录校验后的输入身份、哈希和帧范围。MediaPipe producer
+状态写入 `evidence/mediapipe-status.json`。
+
+`stream.ndjson` 在会话期间持续写入，可由 Viewer 载入回放。下一次文件测试或切入新的 MediaPipe
+会话会更新这些正式会话产物。
+
+启动或输入异常时，先执行 `service.sh status`。摄像头链路同时查看
+`mediapipe.sh status`、`logs/runtime.log` 和 `logs/mediapipe.log`。
