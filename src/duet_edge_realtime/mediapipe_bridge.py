@@ -40,7 +40,14 @@ class RemoteMediaPipeSource:
 
     is_live = True
 
-    def __init__(self, normalizer, *, fps: int = 30, queue_size: int = 120):
+    def __init__(
+        self,
+        normalizer,
+        *,
+        fps: int = 30,
+        queue_size: int = 120,
+        stale_after_s: float = 0.5,
+    ):
         self.identity = "mediapipe-bridge"
         self.metadata = {
             "source": self.identity,
@@ -52,6 +59,7 @@ class RemoteMediaPipeSource:
         self.codec = MediaPipeToMotion151(normalizer, fps=fps)
         self.resampler = PoseResampler(fps)
         self.fps = fps
+        self.stale_after_s = stale_after_s
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
         self.connected = False
         self.producer_id: str | None = None
@@ -59,10 +67,21 @@ class RemoteMediaPipeSource:
         self.emitted_frames = 0
         self.dropped_observations = 0
         self.last_observation_wall_s: float | None = None
+        self.last_emitted_monotonic_s: float | None = None
         self._stopped = False
         self._connection_lock = asyncio.Lock()
 
     def status(self) -> dict:
+        now = time.monotonic()
+        emitted_age_s = (
+            None
+            if self.last_emitted_monotonic_s is None
+            else max(0.0, now - self.last_emitted_monotonic_s)
+        )
+        pose_usable = bool(
+            emitted_age_s is not None
+            and emitted_age_s <= self.stale_after_s
+        )
         return {
             "state": "connected" if self.connected else "waiting",
             "producer_id": self.producer_id,
@@ -70,6 +89,7 @@ class RemoteMediaPipeSource:
             "emitted_frames": self.emitted_frames,
             "dropped_observations": self.dropped_observations,
             "last_observation_wall_s": self.last_observation_wall_s,
+            "pose_usable": pose_usable,
         }
 
     async def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -82,6 +102,7 @@ class RemoteMediaPipeSource:
                     raise RuntimeError("MediaPipe input mode is not active")
                 self.connected = True
                 self.producer_id = str(hello.get("producer_id") or "mediapipe")
+                self.last_emitted_monotonic_s = None
                 self.resampler.reset()
                 while not self.queue.empty():
                     try:
@@ -159,7 +180,7 @@ class RemoteMediaPipeSource:
                     motion = self.codec.encode(sample.landmarks)
                 except PoseUnavailable:
                     continue
-                yield MotionFrame(
+                frame = MotionFrame(
                     seq=seq,
                     source_time_s=seq / self.fps,
                     motion_151=motion,
@@ -167,6 +188,8 @@ class RemoteMediaPipeSource:
                 )
                 seq += 1
                 self.emitted_frames = seq
+                self.last_emitted_monotonic_s = time.monotonic()
+                yield frame
 
     def stop(self) -> None:
         if self._stopped:

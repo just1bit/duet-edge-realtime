@@ -2,7 +2,9 @@ const $ = id => document.getElementById(id);
 const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 const state = {
-  parents: [], ws: null, mode: 'live', completed: false, running: false, hasLiveFrame: false, retry: 0, retryTimer: null,
+  parents: [], ws: null, mode: 'live', hasLiveFrame: false, retry: 0, retryTimer: null,
+  inputMode: 'file', serviceState: 'waiting_for_input', poseUsable: false,
+  lastFrameAt: null,
   fps: 30, frame: null, replay: [], replayIndex: 0, playhead: 0, paused: false,
   lastTick: performance.now(), yaw: -.42, dragging: false, pointerX: 0,
   telemetryAt: performance.now(), renderedFrames: 0, visibleStalls: 0,
@@ -16,8 +18,81 @@ function status(text, tone = 'waiting') {
 
 function mode(value) {
   state.mode = value;
-  $('mode').textContent = value === 'live' ? 'LIVE' : 'NDJSON';
+  updateModePill();
   $('play').disabled = value === 'live' || !state.replay.length;
+}
+
+function updateModePill() {
+  if (state.mode === 'replay') $('mode').textContent = 'NDJSON · REPLAY';
+  else $('mode').textContent = state.inputMode === 'mediapipe' ? 'MEDIAPIPE' : 'FILE';
+}
+
+function resetArrivalTelemetry() {
+  state.arrivalAnchorAt = null;
+  state.arrivalAnchorFrame = null;
+  state.viewerDelayMs = null;
+}
+
+function resetLiveExperience() {
+  state.serviceState = 'waiting_for_input';
+  state.hasLiveFrame = false;
+  state.poseUsable = false;
+  state.lastFrameAt = null;
+  resetArrivalTelemetry();
+}
+
+const viewerCopy = {
+  file: {
+    waiting: ['Waiting for file input', 'Start a file run, or open an NDJSON recording.'],
+    preparing: ['Preparing file playback', 'Building the first model window.'],
+    live: ['Playing file stream', 'Duet-EDGE output is live.'],
+    completed: ['File playback completed', 'The full recording has been delivered.'],
+    error: ['File stream failed', 'Check the service log for details.'],
+  },
+  mediapipe: {
+    waiting: ['Waiting for a usable pose', 'Step back and keep shoulders, hips, knees and ankles visible.'],
+    preparing: ['Preparing live duet', 'Usable pose received. Waiting for fresh model output.'],
+    live: ['Live duet', 'MediaPipe is driving Duet-EDGE in realtime.'],
+    paused: ['Live duet paused', 'Pose unavailable. Check camera framing or connection.'],
+    error: ['Live pipeline failed', 'Check camera, pose input and service status.'],
+  },
+};
+
+function experienceState() {
+  if (state.serviceState === 'failed') return 'error';
+  if (state.inputMode === 'file') {
+    if (state.serviceState === 'finished') return 'completed';
+    if (state.hasLiveFrame) return 'live';
+    return ['starting', 'buffering'].includes(state.serviceState) ? 'preparing' : 'waiting';
+  }
+  if (!state.poseUsable) return state.hasLiveFrame ? 'paused' : 'waiting';
+  const outputFresh = state.lastFrameAt != null
+    && performance.now() - state.lastFrameAt < 1000;
+  return outputFresh ? 'live' : 'preparing';
+}
+
+function applyExperience() {
+  if (state.mode !== 'live') return;
+  const value = experienceState();
+  updateModePill();
+  const copy = (viewerCopy[state.inputMode] || viewerCopy.file)[value] || [value, ''];
+  $('experience-title').textContent = copy[0];
+  $('experience-detail').textContent = copy[1];
+
+  const viewer = document.querySelector('.viewer');
+  viewer.classList.toggle('viewer-state-paused', value === 'paused');
+  viewer.classList.toggle('viewer-state-error', value === 'error');
+  const showOverlay = ['waiting', 'preparing', 'paused', 'error'].includes(value)
+    || (value === 'completed' && !state.hasLiveFrame);
+  $('empty-state').classList.toggle('hidden', !showOverlay);
+
+  const statusText = {
+    waiting: state.inputMode === 'mediapipe' ? 'Waiting for pose' : 'Waiting for file',
+    preparing: 'Preparing', live: 'Live', paused: 'Paused', completed: 'Completed', error: 'Failed',
+  }[value] || value;
+  const tone = value === 'error' ? 'offline'
+    : ['waiting', 'preparing', 'paused'].includes(value) ? 'waiting' : 'online';
+  status(statusText, tone);
 }
 
 function clearViewer() {
@@ -69,7 +144,7 @@ function draw(frame) {
   drawSkeleton(lead, canvas.width * .3, '#6ca9ff');
   drawSkeleton(companion, canvas.width * .7, '#61e6c8');
   state.frame = frame;
-  $('empty-state').classList.add('hidden');
+  if (state.mode === 'replay') $('empty-state').classList.add('hidden');
   $('frame').textContent = `${frame.frame_id ?? frame.seq ?? '—'} · ${frame.clip_id || 'timeline'}`;
   $('stream-time').textContent = formatStreamTime(frame);
   $('age').textContent = state.mode === 'live' ? frameAge(frame) : 'Local replay';
@@ -111,46 +186,39 @@ function handle(message) {
   if (message.type === 'hello') {
     state.parents = message.parents || [];
     state.fps = message.fps || 30;
-    state.arrivalAnchorAt = null;
-    state.arrivalAnchorFrame = null;
-    state.viewerDelayMs = null;
-  } else if (message.type === 'state') {
-    const label = {starting:'Starting', buffering:'Buffering', playing:'Live', draining:'Finishing', finished:'Completed', failed:'Failed'}[message.state];
-    state.running = message.state === 'playing' || message.state === 'draining';
-    if (message.state === 'finished' && !state.hasLiveFrame) {
-      state.completed = false;
-      status('Waiting for stream');
-      return;
+    state.inputMode = message.input_mode || 'file';
+    resetLiveExperience();
+    applyExperience();
+  } else if (message.type === 'input_status') {
+    state.inputMode = message.input_mode || state.inputMode;
+    if (message.pose_usable === true && !state.poseUsable && state.hasLiveFrame) {
+      state.lastFrameAt = null;
+      resetArrivalTelemetry();
     }
-    if (message.state === 'finished') state.completed = true;
-    else if (message.state !== 'failed') state.completed = false;
-    status(label || message.state, message.state === 'failed' ? 'offline' : 'online');
+    state.poseUsable = message.pose_usable === true;
+    applyExperience();
+  } else if (message.type === 'state') {
+    state.serviceState = message.state;
+    applyExperience();
   } else if (message.type === 'frame') {
     if (state.mode === 'live') {
-      state.running = true;
-      state.completed = false;
       state.hasLiveFrame = true;
+      state.lastFrameAt = performance.now();
     }
     if (state.mode === 'live') recordFrameArrival(message);
     draw(message);
+    applyExperience();
   } else if (message.type === 'metrics') {
     if (state.mode === 'live' && !state.hasLiveFrame) return;
     $('p95').textContent = message.inference_p95_ms == null ? '—' : `${message.inference_p95_ms.toFixed(1)} ms`;
     const jitter = message.jitter_p95_ms == null ? '—' : `${message.jitter_p95_ms.toFixed(1)} ms`;
     $('delivery').textContent = `${jitter} · ${message.dropped_view_frames ?? 0}`;
   } else if (message.type === 'eos') {
-    state.running = false;
-    if (!state.hasLiveFrame) {
-      state.completed = false;
-      status('Waiting for stream');
-      return;
-    }
-    state.completed = true;
-    status('Stream completed', 'online');
+    state.serviceState = 'finished';
+    applyExperience();
   } else if (message.type === 'error') {
-    state.running = false;
-    state.completed = false;
-    status('Stream failed', 'offline');
+    state.serviceState = 'failed';
+    applyExperience();
   }
 }
 
@@ -165,12 +233,7 @@ function connect(manual = false) {
   if (manual) state.retry = 0;
   const leavingReplay = state.mode === 'replay';
   mode('live');
-  state.running = false;
-  state.hasLiveFrame = false;
-  state.arrivalAnchorAt = null;
-  state.arrivalAnchorFrame = null;
-  state.viewerDelayMs = null;
-  if (manual || leavingReplay) state.completed = false;
+  resetLiveExperience();
   if (leavingReplay) clearViewer();
   if (state.ws) {
     const old = state.ws;
@@ -183,7 +246,6 @@ function connect(manual = false) {
   state.ws = ws;
   ws.onopen = () => {
     state.retry = 0;
-    state.completed = false;
     $('p95').textContent = '—';
     $('delivery').textContent = '—';
     status('Connected · waiting for frames', 'online');
@@ -193,16 +255,19 @@ function connect(manual = false) {
     catch (error) { console.warn('Invalid stream message', error); }
   };
   ws.onclose = () => {
-    state.running = false;
-    if (state.ws === ws && state.mode === 'live') retryLater(state.completed);
+    state.poseUsable = false;
+    state.lastFrameAt = null;
+    applyExperience();
+    if (state.ws === ws && state.mode === 'live') {
+      retryLater(state.inputMode === 'file' && state.serviceState === 'finished');
+    }
   };
 }
 
 async function openFile(file) {
   mode('replay');
-  state.running = false;
   state.hasLiveFrame = false;
-  state.completed = false;
+  state.inputMode = 'file';
   clearTimeout(state.retryTimer);
   if (state.ws) state.ws.close();
   try {
@@ -262,9 +327,18 @@ function tick(now) {
   const elapsed = Math.min(.1, rawElapsed);
   state.lastTick = now;
   state.renderedFrames += 1;
+  const liveExperience = state.mode === 'live' && experienceState() === 'live';
   if (
-    state.mode === 'live' && state.running && !document.hidden && rawElapsed > .1
+    liveExperience && !document.hidden && rawElapsed > .1
   ) state.visibleStalls += 1;
+  if (
+    state.mode === 'live' && state.inputMode === 'mediapipe'
+    && state.poseUsable && state.lastFrameAt != null
+    && now - state.lastFrameAt >= 1000
+  ) {
+    resetArrivalTelemetry();
+    applyExperience();
+  }
   const telemetryElapsed = now - state.telemetryAt;
   if (
     state.mode === 'live' && state.frame && telemetryElapsed >= 1000

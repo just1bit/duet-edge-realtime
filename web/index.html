@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Duet Realtime Motion Viewer</title>
-  <link rel="stylesheet" href="style.css?v=monitor-minimal-18">
+  <link rel="stylesheet" href="style.css?v=viewer-ux-22">
 </head>
 <body>
   <main>
@@ -29,8 +29,8 @@
       <div class="dancer-label companion"><i></i><span>COMPANION</span><small>Generated motion</small></div>
       <canvas id="canvas" width="1200" height="600"></canvas>
       <div id="empty-state" class="empty-state">
-        <strong>Waiting for motion</strong>
-        <span>Connects automatically, or open an NDJSON recording.</span>
+        <strong id="experience-title">Waiting for motion</strong>
+        <span id="experience-detail">Connects automatically, or open an NDJSON recording.</span>
       </div>
       <div class="drag-hint">Drag canvas to rotate view</div>
     </section>
@@ -44,6 +44,6 @@
       <article><span>Jitter · Drops</span><strong id="delivery">—</strong></article>
     </section>
   </main>
-  <script src="viewer.js?v=monitor-minimal-19"></script>
+  <script src="viewer.js?v=viewer-ux-22"></script>
 </body>
 </html>

@@ -13,7 +13,7 @@ from duet_edge_realtime.mediapipe_input import (
     PoseUnavailable,
 )
 from duet_edge_realtime.backends.fake import FakeInferenceBackend
-from duet_edge_realtime.config import RealtimeConfig
+from duet_edge_realtime.config import InputConfig, RealtimeConfig
 from duet_edge_realtime.playout import VirtualClock
 from duet_edge_realtime.schemas import MotionFrame
 from duet_edge_realtime.service import StreamingService
@@ -65,6 +65,26 @@ def standing_landmarks() -> np.ndarray:
     return np.concatenate((mediapipe, np.ones((33, 1), dtype=np.float32)), axis=-1)
 
 
+def run_live_service(source, *, input_mode: str = "file") -> tuple[list[dict], dict]:
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        service = StreamingService(
+            RealtimeConfig(input=InputConfig(mode=input_mode)),
+            FakeInferenceBackend(),
+            source,
+            CompositeSink([NDJSONSink(root / "stream.ndjson")]),
+            VirtualClock(),
+            root / "summary.json",
+        )
+        asyncio.run(service.run())
+        messages = [
+            json.loads(line)
+            for line in (root / "stream.ndjson").read_text().splitlines()
+        ]
+        summary = json.loads((root / "summary.json").read_text())
+    return messages, summary
+
+
 class MediaPipeInputTests(unittest.TestCase):
     def test_encoder_produces_finite_valid_motion(self):
         codec = MediaPipeToMotion151(IdentityNormalizer())
@@ -113,20 +133,72 @@ class MediaPipeInputTests(unittest.TestCase):
                     yield MotionFrame(seq, seq / 30.0, motion, source_id=self.identity)
                     await asyncio.sleep(0)
 
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            service = StreamingService(
-                RealtimeConfig(), FakeInferenceBackend(), LiveSource(),
-                CompositeSink([NDJSONSink(root / "stream.ndjson")]),
-                VirtualClock(), root / "summary.json",
-            )
-            asyncio.run(service.run())
-            messages = [
-                json.loads(line)
-                for line in (root / "stream.ndjson").read_text().splitlines()
-            ]
-            self.assertEqual(sum(item["type"] == "frame" for item in messages), 150)
-            self.assertEqual(messages[-1]["type"], "eos")
+        messages, _ = run_live_service(LiveSource())
+        self.assertEqual(sum(item["type"] == "frame" for item in messages), 150)
+        self.assertEqual(messages[-1]["type"], "eos")
+
+    def test_input_status_reports_pose_usability_changes(self):
+        class LiveSource:
+            is_live = True
+            identity = "test-camera"
+            metadata = {"live": True, "timeline_id": identity}
+            pose_usable = False
+
+            def status(self):
+                return {"pose_usable": self.pose_usable}
+
+            async def frames_async(self):
+                motion = identity_motion(150)
+                self.pose_usable = True
+                for seq, frame in enumerate(motion[:5]):
+                    yield MotionFrame(seq, seq / 30.0, frame, source_id=self.identity)
+                    await asyncio.sleep(0)
+                self.pose_usable = False
+                await asyncio.sleep(0.12)
+                self.pose_usable = True
+                for seq, frame in enumerate(motion[5:], start=5):
+                    yield MotionFrame(seq, seq / 30.0, frame, source_id=self.identity)
+                    await asyncio.sleep(0)
+
+        messages, _ = run_live_service(LiveSource(), input_mode="mediapipe")
+        input_statuses = [
+            message for message in messages if message["type"] == "input_status"
+        ]
+        self.assertEqual(
+            [message["pose_usable"] for message in input_statuses],
+            [False, True, False, True, False],
+        )
+        self.assertTrue(all(
+            message["input_mode"] == "mediapipe" for message in input_statuses
+        ))
+
+    def test_short_mediapipe_session_pauses_without_pipeline_error(self):
+        class ShortLiveSource:
+            is_live = True
+            identity = "short-camera"
+            metadata = {"live": True, "timeline_id": identity}
+
+            def status(self):
+                return {"state": "connected", "pose_usable": True}
+
+            async def frames_async(self):
+                for seq, motion in enumerate(identity_motion(10)):
+                    yield MotionFrame(seq, seq / 30.0, motion, source_id=self.identity)
+                    await asyncio.sleep(0)
+
+        messages, summary = run_live_service(
+            ShortLiveSource(), input_mode="mediapipe"
+        )
+        self.assertFalse(any(message["type"] == "error" for message in messages))
+        self.assertEqual(
+            [
+                message["pose_usable"]
+                for message in messages
+                if message["type"] == "input_status"
+            ][-1],
+            False,
+        )
+        self.assertEqual(summary["lifecycle"]["final_state"], "finished")
 
 
 if __name__ == "__main__":

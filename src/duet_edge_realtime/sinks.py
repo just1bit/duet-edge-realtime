@@ -64,7 +64,7 @@ class ViewerMailbox:
                         break
             self._frame_count += 1
         elif message_type in {
-            "state", "metrics", "degraded", "backpressure", "overload"
+            "state", "input_status", "metrics", "degraded", "backpressure", "overload"
         }:
             for index, existing in enumerate(self._items):
                 if existing.get("type") == message_type:
@@ -166,7 +166,7 @@ class WebSocketSink(Sink):
     async def send(self, message: dict) -> None:
         message_type = message.get("type")
         if message_type in {
-            "state", "metrics", "eos", "error"
+            "state", "input_status", "metrics", "eos", "error"
         }:
             self.latest_status[message_type] = message
         for client, (queue, _) in list(self.clients.items()):

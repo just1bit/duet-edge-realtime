@@ -81,6 +81,7 @@ class StreamingService:
         self._inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="duet-inference")
         self.motion_quality = OnlineMotionQuality(config.fps)
         self._last_transition_id = None
+        self._last_pose_usable: bool | None = None
         self.close_backend = close_backend
 
     def hello(self) -> dict:
@@ -96,6 +97,7 @@ class StreamingService:
             "backend": self.config.backend,
             "backend_badge": self.config.backend.upper(),
             "model_mode": "lead-only",
+            "input_mode": self.config.input.mode,
             "checkpoint": (
                 Path(self.config.paths.checkpoint).name
                 if self.config.paths.checkpoint else None
@@ -179,6 +181,29 @@ class StreamingService:
             "monotonic_offset_s": self.clock.now() - self._start_clock,
         }
 
+    async def _publish_input_status(self, pose_usable: bool | None = None) -> None:
+        if self.config.input.mode != "mediapipe":
+            return
+        if pose_usable is None:
+            source_status = (
+                self.source.status() if hasattr(self.source, "status") else {}
+            )
+            pose_usable = bool(source_status.get("pose_usable"))
+        if pose_usable == self._last_pose_usable:
+            return
+        self._last_pose_usable = pose_usable
+        await self.sink.send({
+            "type": "input_status",
+            "schema_version": SCHEMA_VERSION,
+            "run_id": self.run_id,
+            "session_id": self.session_id,
+            "stream_id": self.stream_id,
+            "input_mode": "mediapipe",
+            "pose_usable": pose_usable,
+            "wall_time_s": time.time(),
+            "monotonic_offset_s": self.clock.now() - self._start_clock,
+        })
+
     async def run(self) -> None:
         # Model warmup is reported separately from session latency.
         self._start_clock = self.clock.now()
@@ -192,11 +217,14 @@ class StreamingService:
             resource_task = asyncio.create_task(self._sample_resources())
             await self._publish_initial_state()
             await self._transition(ServiceState.BUFFERING)
+            await self._publish_input_status()
             tasks = [
                 asyncio.create_task(self._produce_input()),
                 asyncio.create_task(self._run_inference()),
                 asyncio.create_task(self._run_playout()),
             ]
+            if self.config.input.mode == "mediapipe":
+                tasks.append(asyncio.create_task(self._monitor_mediapipe_input()))
             done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_EXCEPTION
             )
@@ -211,6 +239,7 @@ class StreamingService:
                 raise error
             await asyncio.gather(*pending)
             self.metrics.exit_reason = "input_complete"
+            await self._publish_input_status(False)
             await self._transition(ServiceState.FINISHED)
             await self.sink.send({
                 "type": "eos",
@@ -294,6 +323,11 @@ class StreamingService:
             self.metrics.record_resource_sample(sample)
             await asyncio.sleep(max(0.0, interval_s - (time.monotonic() - sample_started)))
 
+    async def _monitor_mediapipe_input(self) -> None:
+        while not self._input_complete.is_set():
+            await self._publish_input_status()
+            await asyncio.sleep(0.1)
+
     async def _produce_input(self) -> None:
         buffer = SlidingWindowBuffer(seed=self.config.model.seed)
         async for frame, ingest_time in self._source_frames():
@@ -302,6 +336,7 @@ class StreamingService:
                 self.metrics.input_first_clock_s = ingest_time
             self.metrics.input_last_clock_s = ingest_time
             self.metrics.input_frames += 1
+            await self._publish_input_status()
             try:
                 window = buffer.push(frame, ingest_time)
             except SequenceError:
@@ -323,7 +358,16 @@ class StreamingService:
             if self.metrics.input_last_clock_s is not None
             else self.clock.now()
         )
-        tail = buffer.flush(tail_time)
+        if (
+            getattr(self.source, "is_live", False)
+            and buffer.last_seq is not None
+            and buffer.last_seq < self.config.window_frames - 1
+        ):
+            # A live session may be stopped before its first complete model
+            # window. This is a normal Viewer pause, not a malformed file.
+            tail = None
+        else:
+            tail = buffer.flush(tail_time)
         if tail is not None:
             await self._enqueue_inference(tail)
         self._input_complete.set()
@@ -500,6 +544,9 @@ class StreamingService:
         while True:
             item = await self._output_queue.get()
             if item is STOP:
+                if self.lifecycle.state == ServiceState.BUFFERING:
+                    # Live input can stop before the first generated batch.
+                    return
                 if self.lifecycle.state != ServiceState.DRAINING:
                     raise RuntimeError("playout drained before input completion was published")
                 return

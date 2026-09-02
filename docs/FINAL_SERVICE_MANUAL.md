@@ -2,10 +2,40 @@
 
 Final 服务入口覆盖首次准备、日常启动、状态查询、输入运行和有序停止。
 
-## 1. 使用前提
+## 1. 环境安装
 
-运行环境包含 Python、CUDA、PyTorch、PyTorch3D、项目依赖、模型代码、checkpoint 和基线输入。
-首次执行 `start` 时，服务自动创建并准备运行目录。
+进入项目目录并创建 Python 3.10 虚拟环境：
+
+```bash
+cd PROJECT_ROOT/duet-edge-realtime
+python3.10 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -U pip
+```
+
+只运行本地开发和自动化检查时，安装基础依赖：
+
+```bash
+python3 -m pip install -e '.[local]'
+```
+
+运行 CUDA 推理时，在已激活的虚拟环境中安装 CUDA 12.8 版本的 PyTorch、GPU 依赖和
+PyTorch3D：
+
+```bash
+python3 -m pip install 'torch==2.7.0' --index-url https://download.pytorch.org/whl/cu128
+python3 -m pip install -e '.[gpu]'
+python3 -m pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
+```
+
+需要 MediaPipe 摄像头输入时，完成上述 GPU 环境安装后再加入 camera 依赖：
+
+```bash
+python3 -m pip install -e '.[gpu,camera]'
+```
+
+运行环境还需要可用的 CUDA 驱动、模型代码、checkpoint 和基线输入。首次执行 `start` 时，
+服务自动创建并准备运行目录。
 
 已有运行目录通常包含：
 

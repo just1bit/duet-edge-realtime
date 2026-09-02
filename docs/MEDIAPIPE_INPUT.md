@@ -16,10 +16,12 @@ landmarks -> 30 FPS resampling -> SMPL24 retarget -> normalized motion_151
 producer 和 Service 使用 `duet-edge-mediapipe/v1` 本机协议。ingest 固定绑定回环地址
 `127.0.0.1`，默认端口为 `8767`，端口可通过 `server.ingest_port` 配置。
 
-## 安装和检查
+## 环境自检
+
+环境安装统一参见
+[Final 服务操作手册的“环境安装”](FINAL_SERVICE_MANUAL.md#1-环境安装)。安装完成后执行自检：
 
 ```bash
-python -m pip install -e '.[gpu,camera]'
 bash scripts/final_execution/mediapipe.sh doctor
 ```
 

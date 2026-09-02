@@ -63,9 +63,11 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(messages[0]["protocol"], "duet-edge-stream/v3")
             self.assertEqual(messages[0]["schema_version"], "3.0.0")
             self.assertEqual(messages[0]["model_mode"], "lead-only")
+            self.assertEqual(messages[0]["input_mode"], "file")
             self.assertEqual(len(messages[0]["parents"]), 24)
             states = [message["state"] for message in messages if message["type"] == "state"]
             self.assertEqual(states, ["starting", "buffering", "playing", "draining", "finished"])
+            self.assertFalse(any(message["type"] == "input_status" for message in messages))
             draining_index = next(
                 index for index, message in enumerate(messages)
                 if message.get("type") == "state" and message.get("state") == "draining"

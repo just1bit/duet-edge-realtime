@@ -2,6 +2,7 @@ import asyncio
 import json
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,6 +43,16 @@ async def send(writer: asyncio.StreamWriter, value: dict) -> None:
 
 
 class MediaPipeBridgeTests(unittest.TestCase):
+    def test_pose_usable_is_the_only_freshness_gate(self):
+        source = RemoteMediaPipeSource(IdentityNormalizer(), stale_after_s=0.5)
+        self.assertFalse(source.status()["pose_usable"])
+
+        source.last_emitted_monotonic_s = time.monotonic()
+        self.assertTrue(source.status()["pose_usable"])
+
+        source.last_emitted_monotonic_s = time.monotonic() - 1.0
+        self.assertFalse(source.status()["pose_usable"])
+
     def test_remote_source_accepts_producer_without_ending_on_disconnect(self):
         async def scenario():
             source = RemoteMediaPipeSource(IdentityNormalizer())

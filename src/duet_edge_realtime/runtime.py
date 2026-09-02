@@ -250,6 +250,7 @@ class RuntimeDaemon:
             "backend": self.config.backend,
             "backend_badge": self.config.backend.upper(),
             "model_mode": "lead-only",
+            "input_mode": self.input_mode,
             "checkpoint": (
                 Path(self.config.paths.checkpoint).name
                 if self.config.paths.checkpoint else None
@@ -440,6 +441,7 @@ class RuntimeDaemon:
                 source = RemoteMediaPipeSource(
                     self.backend.edge.normalizer,
                     fps=config.fps,
+                    stale_after_s=config.input.maximum_missing_s,
                 )
             else:
                 manifest = await asyncio.to_thread(self._load_input_manifest)

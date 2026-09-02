@@ -14,7 +14,11 @@ class ServiceState(str, Enum):
 
 _TRANSITIONS = {
     ServiceState.STARTING: {ServiceState.BUFFERING, ServiceState.FAILED},
-    ServiceState.BUFFERING: {ServiceState.PLAYING, ServiceState.FAILED},
+    ServiceState.BUFFERING: {
+        ServiceState.PLAYING,
+        ServiceState.FINISHED,
+        ServiceState.FAILED,
+    },
     ServiceState.PLAYING: {ServiceState.DRAINING, ServiceState.FAILED},
     ServiceState.DRAINING: {ServiceState.FINISHED, ServiceState.FAILED},
     ServiceState.FINISHED: set(),
